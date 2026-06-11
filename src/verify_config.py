@@ -87,6 +87,9 @@ def print_help():
     PARAM.append("MEM_CYCL");                       VARTYP.append("int");           DETAILS.append("Number of MC cycles to use during cluster selection")
     PARAM.append("MEM_NSEL");                       VARTYP.append("int");           DETAILS.append("Number of clusters to select")
     PARAM.append("MEM_ECUT");                       VARTYP.append("float");         DETAILS.append("Maximum ChIMES \"dumb\" energy cutoff for cluster selection")
+    PARAM.append("DO_DOPT");                        VARTYP.append("bool");          DETAILS.append("If true (and DO_CLUSTER is true), use D-optimality (maxvol) for cluster downselection instead of MC energy histogram; skips ChIMES dumb-energy calculation")
+    PARAM.append("DOPT_GAMMA_MIN");                 VARTYP.append("float");         DETAILS.append("Lower gamma threshold for D-optimality cluster selection (default: 3.0)")
+    PARAM.append("DOPT_GAMMA_MAX");                 VARTYP.append("float");         DETAILS.append("Upper gamma threshold for D-optimality cluster selection (default: 10.0)")
     PARAM.append("CALC_REPO_ENER_CENT_QUEUE");      VARTYP.append("str");           DETAILS.append("Queue to submit cluster ChIMES \"dumb\" energy calculations for central repository clusters to")
     PARAM.append("CALC_REPO_ENER_CENT_TIME");       VARTYP.append("str");           DETAILS.append("Walltime for ChIMES \"dumb\" energy calculations for central repository clusters")
     PARAM.append("CALC_REPO_ENER_QUEUE");           VARTYP.append("str");           DETAILS.append("Queue to submit cluster ChIMES \"dumb\" energy calculations for candidate clusters to")
@@ -1512,7 +1515,36 @@ def verify(user_config):
             print("         Will use a value of 100.0")
 
             user_config.MEM_ECUT = 100.0        
-            
+
+        if not hasattr(user_config,'DO_DOPT'):
+
+            # Use D-optimality (maxvol) for cluster downselection instead of MC energy histogram?
+
+            print("WARNING: Option config.DO_DOPT was not set")
+            print("         Will use a value of False (MC energy-histogram selection)")
+
+            user_config.DO_DOPT = False
+
+        if user_config.DO_DOPT:
+
+            if not hasattr(user_config,'DOPT_GAMMA_MIN'):
+
+                # Lower gamma bound for D-optimality cluster selection
+
+                print("WARNING: Option config.DOPT_GAMMA_MIN was not set")
+                print("         Will use a value of 3.0")
+
+                user_config.DOPT_GAMMA_MIN = 3.0
+
+            if not hasattr(user_config,'DOPT_GAMMA_MAX'):
+
+                # Upper gamma bound for D-optimality cluster selection
+
+                print("WARNING: Option config.DOPT_GAMMA_MAX was not set")
+                print("         Will use a value of 10.0")
+
+                user_config.DOPT_GAMMA_MAX = 10.0
+
         if not hasattr(user_config,'CALC_REPO_ENER_CENT_QUEUE'):
 
             # Queue for central repo energy calculations

@@ -457,44 +457,62 @@ def main(args):
             
             if not restart_controller.CLUENER_CALC:
 
-                # Compute cluster energies
-            
-                active_jobs = cluster.get_repo_energies(
-                        base_runfile   = config.WORKING_DIR + "ALL_BASE_FILES/" + "run_md.cluster",
-                        driver_dir     = config.DRIVER_DIR,
-                        job_email      = config.HPC_EMAIL,
-                        job_ppn        = str(config.HPC_PPN),
-                        job_queue      = config.CALC_REPO_ENER_QUEUE,
-                        job_walltime   = str(config.CALC_REPO_ENER_TIME),                    
-                        job_cent_queue    = config.CALC_REPO_ENER_CENT_QUEUE,
-                        job_cent_walltime = str(config.CALC_REPO_ENER_CENT_TIME), 
-                        job_account    = config.HPC_ACCOUNT, 
-                        job_system     = config.HPC_SYSTEM,
-                        job_executable = config.MD_SER)    
-                        
-                helpers.wait_for_jobs(active_jobs, job_system = config.HPC_SYSTEM, verbose = True, job_name = "get_repo_energies")
-           
-                restart_controller.update_file("CLUENER_CALC: COMPLETE" + '\n')    
-                
+                if config.DO_DOPT:
+                    # D-optimality path: descriptors are generated during CLU_SELECTION;
+                    # ChIMES dumb-energy calculation is not needed.
+                    print("DO_DOPT=True: skipping ChIMES dumb-energy calculation (CLUENER_CALC).")
+                else:
+                    # MC energy-histogram path: compute per-cluster ChIMES energies.
+                    active_jobs = cluster.get_repo_energies(
+                            base_runfile   = config.WORKING_DIR + "ALL_BASE_FILES/" + "run_md.cluster",
+                            driver_dir     = config.DRIVER_DIR,
+                            job_email      = config.HPC_EMAIL,
+                            job_ppn        = str(config.HPC_PPN),
+                            job_queue      = config.CALC_REPO_ENER_QUEUE,
+                            job_walltime   = str(config.CALC_REPO_ENER_TIME),
+                            job_cent_queue    = config.CALC_REPO_ENER_CENT_QUEUE,
+                            job_cent_walltime = str(config.CALC_REPO_ENER_CENT_TIME),
+                            job_account    = config.HPC_ACCOUNT,
+                            job_system     = config.HPC_SYSTEM,
+                            job_executable = config.MD_SER)
+
+                    helpers.wait_for_jobs(active_jobs, job_system = config.HPC_SYSTEM, verbose = True, job_name = "get_repo_energies")
+
+                restart_controller.update_file("CLUENER_CALC: COMPLETE" + '\n')
+
                 helpers.email_user(config.DRIVER_DIR, EMAIL_ADD, "ALC-" + str(THIS_ALC) + " status: " + "CLUENER_CALC: COMPLETE ")
-                
+
             else:
-                restart_controller.update_file("CLUENER_CALC: COMPLETE" + '\n')    
-            
-            
+                restart_controller.update_file("CLUENER_CALC: COMPLETE" + '\n')
+
+
             if not restart_controller.CLU_SELECTION:
-            
+
                 # Generate cluster sub-selection and store in central repository
-            
+
                 gen_selections.cleanup_repo(THIS_ALC)
-            
-                gen_selections.gen_subset(
-                        nsel     = config.MEM_NSEL, # Number of selections to make    
-                        nsweep   = config.MEM_CYCL, # Number of MC sqeeps          
-                        nbins    = config.MEM_BINS, # Number of histogram bins      
-                        ecut     = config.MEM_ECUT, # Maximum energy to consider
-                        seed     = config.SEED    ) # Seed for random number generator    
-            
+
+                if config.DO_DOPT:
+                    gen_selections.gen_subset_dopt(
+                            gamma_min      = config.DOPT_GAMMA_MIN,
+                            gamma_max      = config.DOPT_GAMMA_MAX,
+                            job_executable = config.CHIMES_LSQ,
+                            job_nodes      = str(config.CHIMES_BUILD_NODES),
+                            job_ppn        = str(config.HPC_PPN),
+                            job_walltime   = str(config.CHIMES_BUILD_TIME),
+                            job_queue      = config.CHIMES_BUILD_QUEUE,
+                            job_account    = config.HPC_ACCOUNT,
+                            job_system     = config.HPC_SYSTEM,
+                            job_email      = config.HPC_EMAIL,
+                            job_modules    = config.CHIMES_LSQ_MODULES)
+                else:
+                    gen_selections.gen_subset(
+                            nsel     = config.MEM_NSEL, # Number of selections to make
+                            nsweep   = config.MEM_CYCL, # Number of MC sweeps
+                            nbins    = config.MEM_BINS, # Number of histogram bins
+                            ecut     = config.MEM_ECUT, # Maximum energy to consider
+                            seed     = config.SEED    ) # Seed for random number generator
+
                 gen_selections.populate_repo(THIS_ALC)
 
                 repo = "CASE-" + str(THIS_CASE) + "_INDEP_" + str(THIS_INDEP) + "/CFG_REPO/"
@@ -1022,49 +1040,68 @@ def main(args):
                 
                         
                 if not restart_controller.CLUENER_CALC:
-                
-                    # Compute cluster energies
-                
-                    gen_selections.cleanup_repo(THIS_ALC)    
-                
-                    active_jobs = cluster.get_repo_energies(
-                            calc_central   = True,
-                            base_runfile   = config.WORKING_DIR + "ALL_BASE_FILES/" + "run_md.cluster",
-                            driver_dir     = config.DRIVER_DIR,
-                            job_email      = config.HPC_EMAIL,
-                            job_ppn        = str(config.HPC_PPN),
-                            job_queue      = config.CALC_REPO_ENER_QUEUE,
-                            job_walltime   = str(config.CALC_REPO_ENER_TIME),                  
-                            job_cent_queue    = config.CALC_REPO_ENER_CENT_QUEUE,
-                            job_cent_walltime = str(config.CALC_REPO_ENER_CENT_TIME), 
-                            job_account    = config.HPC_ACCOUNT, 
-                            job_system     = config.HPC_SYSTEM,
-                            job_executable = config.MD_SER)    
-                            
-                    helpers.wait_for_jobs(active_jobs, job_system = config.HPC_SYSTEM, verbose = True, job_name = "get_repo_energies")
-                
-                    restart_controller.update_file("CLUENER_CALC: COMPLETE" + '\n')    
-                    
-                    helpers.email_user(config.DRIVER_DIR, EMAIL_ADD, "ALC-" + str(THIS_ALC) + " status: " + "CLUENER_CALC: COMPLETE ")    
+
+                    if config.DO_DOPT:
+                        # D-optimality path: descriptors are generated during CLU_SELECTION;
+                        # ChIMES dumb-energy calculation is not needed.
+                        print("DO_DOPT=True: skipping ChIMES dumb-energy calculation (CLUENER_CALC).")
+                        gen_selections.cleanup_repo(THIS_ALC)
+                    else:
+                        # MC energy-histogram path: compute per-cluster ChIMES energies.
+                        gen_selections.cleanup_repo(THIS_ALC)
+
+                        active_jobs = cluster.get_repo_energies(
+                                calc_central   = True,
+                                base_runfile   = config.WORKING_DIR + "ALL_BASE_FILES/" + "run_md.cluster",
+                                driver_dir     = config.DRIVER_DIR,
+                                job_email      = config.HPC_EMAIL,
+                                job_ppn        = str(config.HPC_PPN),
+                                job_queue      = config.CALC_REPO_ENER_QUEUE,
+                                job_walltime   = str(config.CALC_REPO_ENER_TIME),
+                                job_cent_queue    = config.CALC_REPO_ENER_CENT_QUEUE,
+                                job_cent_walltime = str(config.CALC_REPO_ENER_CENT_TIME),
+                                job_account    = config.HPC_ACCOUNT,
+                                job_system     = config.HPC_SYSTEM,
+                                job_executable = config.MD_SER)
+
+                        helpers.wait_for_jobs(active_jobs, job_system = config.HPC_SYSTEM, verbose = True, job_name = "get_repo_energies")
+
+                    restart_controller.update_file("CLUENER_CALC: COMPLETE" + '\n')
+
+                    helpers.email_user(config.DRIVER_DIR, EMAIL_ADD, "ALC-" + str(THIS_ALC) + " status: " + "CLUENER_CALC: COMPLETE ")
                 else:
-                    restart_controller.update_file("CLUENER_CALC: COMPLETE" + '\n')    
-                
-                
+                    restart_controller.update_file("CLUENER_CALC: COMPLETE" + '\n')
+
+
                 if not restart_controller.CLU_SELECTION:
-                
+
                     # Generate cluster sub-selection and store in central repository
-                
-                    gen_selections.gen_subset(
-                             repo      = "../CENTRAL_REPO/full_repo.energies_normed",
-                             nsel      = config.MEM_NSEL, # Number of selections to make    
-                             nsweep   = config.MEM_CYCL, # Number of MC sqeeps           
-                             nbins    = config.MEM_BINS, # Number of histogram bins      
-                             ecut      = config.MEM_ECUT) # Maximum energy to consider    
-                             
-                    gen_selections.populate_repo(THIS_ALC)   
-                             
+
+                    if config.DO_DOPT:
+                        gen_selections.gen_subset_dopt(
+                                gamma_min      = config.DOPT_GAMMA_MIN,
+                                gamma_max      = config.DOPT_GAMMA_MAX,
+                                job_executable = config.CHIMES_LSQ,
+                                job_nodes      = str(config.CHIMES_BUILD_NODES),
+                                job_ppn        = str(config.HPC_PPN),
+                                job_walltime   = str(config.CHIMES_BUILD_TIME),
+                                job_queue      = config.CHIMES_BUILD_QUEUE,
+                                job_account    = config.HPC_ACCOUNT,
+                                job_system     = config.HPC_SYSTEM,
+                                job_email      = config.HPC_EMAIL,
+                                job_modules    = config.CHIMES_LSQ_MODULES)
+                    else:
+                        gen_selections.gen_subset(
+                                repo      = "../CENTRAL_REPO/full_repo.energies_normed",
+                                nsel      = config.MEM_NSEL, # Number of selections to make
+                                nsweep    = config.MEM_CYCL, # Number of MC sweeps
+                                nbins     = config.MEM_BINS, # Number of histogram bins
+                                ecut      = config.MEM_ECUT) # Maximum energy to consider
+
+                    gen_selections.populate_repo(THIS_ALC)
+
                     restart_controller.update_file("CLU_SELECTION: COMPLETE" + '\n')
-                    
+
                     helpers.email_user(config.DRIVER_DIR, EMAIL_ADD, "ALC-" + str(THIS_ALC) + " status: " + "CLU_SELECTION: COMPLETE ")
                 else:
                     restart_controller.update_file("CLU_SELECTION: COMPLETE" + '\n')

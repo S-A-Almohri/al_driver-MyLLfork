@@ -659,6 +659,419 @@ def gen_subset(**kwargs): # time python gen_subset.py  all.energies_normed $SELE
     helpers.run_bash_cmnd("mv selection.dat all.selection.dat")
 
 
+################################
+# D-Optimality cluster selection
+################################
+
+def _read_xyzlist(filename):
+    """
+    Reads a xyzlist.dat or ts_xyzlist.dat file.
+
+    Returns a list of (n_atoms, filepath) tuples; returns [] if file is absent or empty.
+    """
+    clusters = []
+    if not os.path.exists(filename):
+        return clusters
+    with open(filename, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split()
+            n_atoms  = int(parts[0])
+            filepath = parts[-1]
+            clusters.append((n_atoms, filepath))
+    return clusters
+
+
+def _cluster_xyz_to_xyzf(src_xyz, dst_xyzf):
+    """
+    Converts a cluster .wrap.xyz file to ChIMES xyzf format with zero forces/energy.
+
+    The wrap.xyz comment line is 'Lx Ly Lz' (orthorhombic box dims).
+    The xyzf comment line becomes 'NON_ORTHO Lx 0 0  0 Ly 0  0 0 Lz  0 0 0 0 0 0  0'
+    (box matrix, then six stress zeros, then one energy zero).
+    """
+    with open(src_xyz, 'r') as f:
+        lines = f.readlines()
+
+    n_atoms = int(lines[0].strip())
+    box_parts = lines[1].strip().split()
+    Lx, Ly, Lz = box_parts[0], box_parts[1], box_parts[2]
+
+    box_line = ("NON_ORTHO  {Lx} 0.0 0.0  0.0 {Ly} 0.0  0.0 0.0 {Lz}"
+                "  0.0 0.0 0.0 0.0 0.0 0.0  0.0\n").format(Lx=Lx, Ly=Ly, Lz=Lz)
+
+    with open(dst_xyzf, 'w') as f:
+        f.write(lines[0])
+        f.write(box_line)
+        for line in lines[2:2 + n_atoms]:
+            parts = line.strip().split()
+            f.write("{} {} {} {}  0.0 0.0 0.0\n".format(
+                parts[0], parts[1], parts[2], parts[3]))
+
+
+def _modify_fm_setup_for_descriptors(src_fm_setup, dst_fm_setup, n_total_frames):
+    """
+    Writes a modified copy of fm_setup.in suitable for descriptor-only generation.
+
+    Changes made relative to the source:
+    - TRJFILE  → MULTI candidate_traj_list.dat
+    - WRAPTRJ  → false   (clusters already wrapped)
+    - NFRAMES  → n_total_frames
+    - FITSTRS  → false
+    - FITENER  → false
+    - SPLITFI  → false
+    - HIERARC  → false
+    """
+    with open(src_fm_setup, 'r') as f:
+        lines = f.readlines()
+
+    flag_trjfile = False
+    flag_wraptrj = False
+    flag_nframes = False
+    flag_fitstrs = False
+    flag_fitener = False
+    flag_splitfi = False
+    flag_hierarc = False
+
+    out = []
+    for line in lines:
+        if flag_trjfile:
+            out.append('\tMULTI candidate_traj_list.dat\n')
+            flag_trjfile = False
+        elif flag_wraptrj:
+            out.append('\tfalse\n')
+            flag_wraptrj = False
+        elif flag_nframes:
+            out.append('\t{}\n'.format(n_total_frames))
+            flag_nframes = False
+        elif flag_fitstrs:
+            out.append('\tfalse\n')
+            flag_fitstrs = False
+        elif flag_fitener:
+            out.append('\tfalse\n')
+            flag_fitener = False
+        elif flag_splitfi:
+            out.append('\tfalse\n')
+            flag_splitfi = False
+        elif flag_hierarc:
+            out.append('\tfalse\n')
+            flag_hierarc = False
+        else:
+            out.append(line)
+            if   "TRJFILE" in line: flag_trjfile = True
+            elif "WRAPTRJ" in line: flag_wraptrj = True
+            elif "NFRAMES" in line: flag_nframes = True
+            elif "FITSTRS" in line: flag_fitstrs = True
+            elif "FITENER" in line: flag_fitener = True
+            elif "SPLITFI" in line: flag_splitfi = True
+            elif "HIERARC" in line: flag_hierarc = True
+
+    with open(dst_fm_setup, 'w') as f:
+        f.writelines(out)
+
+
+def gen_subset_dopt(**kwargs):
+    """
+    Selects candidate clusters using D-optimality (maxvol algorithm).
+
+    Usage: gen_subset_dopt(<arguments>)
+
+    Algorithm:
+        1. Build an atomic design matrix A_atomic from the reference GEN_FF/A.txt
+           (or GEN_FF/A_comb.txt) by hstacking every three consecutive force rows
+           (fx_i, fy_i, fz_i) into one row per atom.
+        2. Run maxvol on A_atomic to find the D-optimal subset (indices piv) and
+           compute the inverse of the square submatrix A_atomic[piv].
+        3. Submit a chimes_lsq job to generate descriptors for the candidate clusters
+           listed in xyzlist.dat and ts_xyzlist.dat.
+        4. Build A_atomic for the candidate clusters from the resulting A.txt.
+        5. Compute per-atom gamma = max row of (A_atomic_cand @ inverse_A_subset).
+        6. Aggregate to per-cluster max gamma, then keep clusters with gamma in
+           [gamma_min, gamma_max].
+        7. Write all.xyzlist.dat and all.selection.dat; save diagnostic PDF.
+
+    Notes:
+        - Requires maxvolpy: pip install maxvolpy
+        - Expects xyzlist.dat and ts_xyzlist.dat in the CWD (from cluster.list_clusters)
+        - Expects GEN_FF/A.txt (or GEN_FF/A_comb.txt) from the current ALC's fit
+        - Expects GEN_FF/fm_setup.in to exist (used as template for descriptor job)
+        - All file I/O is relative to the CWD (the ALC-N directory)
+
+    """
+
+    ################################
+    # 0. Set up argument parser
+    ################################
+
+    default_keys   = [""]*16
+    default_values = [""]*16
+
+    default_keys[0 ] = "gamma_min"     ; default_values[0 ] = 3.0
+    default_keys[1 ] = "gamma_max"     ; default_values[1 ] = 10.0
+    default_keys[2 ] = "amat_path"     ; default_values[2 ] = ""              # auto-detect GEN_FF/A_comb.txt or A.txt
+    default_keys[3 ] = "xyzlist"       ; default_values[3 ] = "xyzlist.dat"
+    default_keys[4 ] = "ts_xyzlist"    ; default_values[4 ] = "ts_xyzlist.dat"
+    default_keys[5 ] = "fm_setup"      ; default_values[5 ] = "GEN_FF/fm_setup.in"
+    default_keys[6 ] = "job_name"      ; default_values[6 ] = "dopt_desc"
+    default_keys[7 ] = "job_nodes"     ; default_values[7 ] = "1"
+    default_keys[8 ] = "job_ppn"       ; default_values[8 ] = "36"
+    default_keys[9 ] = "job_walltime"  ; default_values[9 ] = "01:00:00"
+    default_keys[10] = "job_queue"     ; default_values[10] = "pdebug"
+    default_keys[11] = "job_account"   ; default_values[11] = ""
+    default_keys[12] = "job_system"    ; default_values[12] = "slurm"
+    default_keys[13] = "job_email"     ; default_values[13] = True
+    default_keys[14] = "job_modules"   ; default_values[14] = ""
+    default_keys[15] = "job_executable"; default_values[15] = ""              # path to chimes_lsq
+
+    args = dict(list(zip(default_keys, default_values)))
+    args.update(kwargs)
+
+    GAMMA_MIN = float(args["gamma_min"])
+    GAMMA_MAX = float(args["gamma_max"])
+
+    print("gen_subset_dopt: gamma_min={}, gamma_max={}".format(GAMMA_MIN, GAMMA_MAX))
+
+    ################################
+    # 1. Read candidate cluster lists
+    ################################
+
+    tight_clusters = _read_xyzlist(args["xyzlist"])
+    ts_clusters    = _read_xyzlist(args["ts_xyzlist"])
+    all_clusters   = tight_clusters + ts_clusters
+
+    if len(all_clusters) == 0:
+        print("ERROR (gen_subset_dopt): No candidate clusters found in {} or {}.".format(
+            args["xyzlist"], args["ts_xyzlist"]))
+        exit()
+
+    print("gen_subset_dopt: {} tight + {} ts = {} total candidate clusters".format(
+        len(tight_clusters), len(ts_clusters), len(all_clusters)))
+
+    ################################
+    # 2. Build all.xyzlist.dat
+    #    (required by populate_repo; normally created by get_repo_energies)
+    ################################
+
+    helpers.cat_specific("all.xyzlist.dat",
+        [f for f in [args["xyzlist"], args["ts_xyzlist"]]
+         if os.path.exists(f) and os.path.getsize(f) > 0])
+
+    ################################
+    # 3. Prepare DOPT_DESCRIPTORS work directory
+    ################################
+
+    WORK_DIR = "DOPT_DESCRIPTORS"
+    helpers.run_bash_cmnd("rm -rf " + WORK_DIR)
+    helpers.run_bash_cmnd("mkdir  " + WORK_DIR)
+
+    curr_dir = helpers.run_bash_cmnd("pwd").rstrip()
+
+    # Convert each cluster xyz → xyzf (with zero forces/energy)
+    traj_list_lines = [str(len(all_clusters)) + "\n"]
+
+    for idx, (n_atoms, src_xyz) in enumerate(all_clusters):
+        tag      = "{:05d}".format(idx)
+        dst_xyzf = os.path.join(WORK_DIR, "candidate_{}.xyzf".format(tag))
+
+        src_path = src_xyz if os.path.isabs(src_xyz) else os.path.join(curr_dir, src_xyz)
+        _cluster_xyz_to_xyzf(src_path, dst_xyzf)
+        traj_list_lines.append("1  candidate_{}.xyzf  0\n".format(tag))
+
+    with open(os.path.join(WORK_DIR, "candidate_traj_list.dat"), 'w') as f:
+        f.writelines(traj_list_lines)
+
+    ################################
+    # 4. Write modified fm_setup.in for descriptor generation
+    ################################
+
+    _modify_fm_setup_for_descriptors(
+        args["fm_setup"],
+        os.path.join(WORK_DIR, "fm_setup.in"),
+        len(all_clusters))
+
+    ################################
+    # 5. Submit chimes_lsq descriptor job, wait
+    ################################
+
+    os.chdir(WORK_DIR)
+
+    job_cmd = args["job_executable"] + " fm_setup.in | tee fm_setup.log"
+
+    job_id = helpers.create_and_launch_job(
+        job_name       = args["job_name"],
+        job_nodes      = str(args["job_nodes"]),
+        job_ppn        = str(args["job_ppn"]),
+        job_walltime   = str(args["job_walltime"]),
+        job_queue      = args["job_queue"],
+        job_account    = args["job_account"],
+        job_system     = args["job_system"],
+        job_email      = args["job_email"],
+        job_executable = job_cmd,
+        job_modules    = args["job_modules"],
+    )
+
+    os.chdir(curr_dir)
+
+    helpers.wait_for_jobs(
+        [job_id],
+        job_system = args["job_system"],
+        verbose    = True,
+        job_name   = "dopt_descriptors")
+
+    cand_amat_path = os.path.join(WORK_DIR, "A.txt")
+    if not os.path.exists(cand_amat_path):
+        print("ERROR (gen_subset_dopt): Descriptor job did not produce {}.".format(cand_amat_path))
+        print("       Check {}/fm_setup.log for errors.".format(WORK_DIR))
+        exit()
+
+    ################################
+    # 6. Load reference A matrix, build A_atomic
+    ################################
+
+    if args["amat_path"]:
+        ref_amat_path = args["amat_path"]
+    elif os.path.exists("GEN_FF/A_comb.txt"):
+        ref_amat_path = "GEN_FF/A_comb.txt"
+    else:
+        ref_amat_path = "GEN_FF/A.txt"
+
+    print("gen_subset_dopt: loading reference A matrix from", ref_amat_path)
+
+    A_ref = np.loadtxt(ref_amat_path)
+
+    if A_ref.ndim == 1:
+        A_ref = A_ref.reshape(-1, 1)
+
+    n_ref_rows, n_feat = A_ref.shape
+
+    if n_ref_rows % 3 != 0:
+        print("ERROR (gen_subset_dopt): Reference A matrix has {} rows, not divisible by 3.".format(n_ref_rows))
+        print("       Ensure GEN_FF/A.txt is from a force-only fit.")
+        exit()
+
+    n_atoms_ref   = n_ref_rows // 3
+    A_atomic_ref  = np.array([np.hstack(A_ref[3*i : 3*(i+1), :]) for i in range(n_atoms_ref)])
+
+    print("gen_subset_dopt: A_atomic_ref shape:", A_atomic_ref.shape)
+    np.savetxt("A_atomic.txt", A_atomic_ref)
+
+    ################################
+    # 7. D-optimal subset via maxvol, compute inverse
+    ################################
+
+    try:
+        from maxvolpy.maxvol import maxvol
+    except ImportError:
+        print("ERROR (gen_subset_dopt): maxvolpy not found. Install with: pip install maxvolpy")
+        exit()
+
+    n_rows_atomic, n_cols_atomic = A_atomic_ref.shape
+    if n_rows_atomic < n_cols_atomic:
+        print("ERROR (gen_subset_dopt): A_atomic_ref is fat ({} rows < {} cols).".format(
+            n_rows_atomic, n_cols_atomic))
+        print("       maxvol requires a tall matrix. Add more training data.")
+        exit()
+
+    print("gen_subset_dopt: running maxvol...")
+    piv, _ = maxvol(A_atomic_ref, 1.0)
+
+    a_subset = A_atomic_ref[piv]   # shape: (n_cols_atomic, n_cols_atomic) — square
+
+    try:
+        inverse_a_subset = np.linalg.inv(a_subset)
+    except np.linalg.LinAlgError:
+        print("ERROR (gen_subset_dopt): D-optimal submatrix is singular.")
+        exit()
+
+    np.save("inverse_A_subset.npy", inverse_a_subset)
+    print("gen_subset_dopt: maxvol complete. {} pivot rows selected.".format(len(piv)))
+
+    ################################
+    # 8. Load candidate A matrix, build A_atomic
+    ################################
+
+    A_cand = np.loadtxt(cand_amat_path)
+
+    if A_cand.ndim == 1:
+        A_cand = A_cand.reshape(-1, 1)
+
+    n_cand_rows, n_feat_cand = A_cand.shape
+
+    if n_feat_cand != n_feat:
+        print("ERROR (gen_subset_dopt): Candidate A matrix has {} features but reference has {}.".format(
+            n_feat_cand, n_feat))
+        print("       Ensure the same fm_setup.in topology/cutoffs are used.")
+        exit()
+
+    if n_cand_rows % 3 != 0:
+        print("ERROR (gen_subset_dopt): Candidate A matrix has {} rows, not divisible by 3.".format(n_cand_rows))
+        exit()
+
+    n_atoms_cand   = n_cand_rows // 3
+    A_atomic_cand  = np.array([np.hstack(A_cand[3*i : 3*(i+1), :]) for i in range(n_atoms_cand)])
+
+    print("gen_subset_dopt: A_atomic_cand shape:", A_atomic_cand.shape)
+
+    ################################
+    # 9. Compute per-atom gamma, aggregate to per-cluster max gamma
+    ################################
+
+    dot_products   = A_atomic_cand @ inverse_a_subset       # (n_atoms_cand, n_cols_atomic)
+    gamma_per_atom = np.max(dot_products, axis=1)
+
+    cluster_gamma = []
+    atom_offset   = 0
+
+    for n_atoms, _ in all_clusters:
+        block = gamma_per_atom[atom_offset : atom_offset + n_atoms]
+        cluster_gamma.append(float(np.max(block)))
+        atom_offset += n_atoms
+
+    cluster_gamma = np.array(cluster_gamma)
+
+    if atom_offset != n_atoms_cand:
+        print("WARNING (gen_subset_dopt): atom count mismatch: xyzlist says {} atoms but A.txt has {}.".format(
+            atom_offset, n_atoms_cand))
+
+    ################################
+    # 10. Select clusters in [gamma_min, gamma_max]
+    ################################
+
+    selected = np.where((cluster_gamma >= GAMMA_MIN) & (cluster_gamma <= GAMMA_MAX))[0]
+
+    print("gen_subset_dopt: {} / {} clusters selected (gamma in [{}, {}])".format(
+        len(selected), len(all_clusters), GAMMA_MIN, GAMMA_MAX))
+
+    if len(selected) == 0:
+        print("WARNING (gen_subset_dopt): No clusters satisfy the gamma threshold. "
+              "Consider adjusting DOPT_GAMMA_MIN / DOPT_GAMMA_MAX.")
+
+    np.savetxt("all.selection.dat", selected.astype(int), fmt='%5d')
+
+    ################################
+    # 11. Diagnostic plots
+    ################################
+
+    plt.figure(figsize=(10, 6))
+    plt.hist(cluster_gamma, bins=min(50, len(cluster_gamma)),
+             alpha=0.7, color='steelblue', label='Cluster max gamma')
+    plt.axvline(x=GAMMA_MIN, color='green',  linestyle='--', label='gamma_min = {}'.format(GAMMA_MIN))
+    plt.axvline(x=GAMMA_MAX, color='red',    linestyle='--', label='gamma_max = {}'.format(GAMMA_MAX))
+    plt.xlabel('Max Gamma per Cluster')
+    plt.ylabel('Count')
+    plt.title('D-Optimality Cluster Selection: Gamma Distribution')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig('dopt_gamma_dist.pdf')
+    plt.clf()
+    plt.cla()
+    plt.close()
+
+    np.savetxt("dopt_cluster_gamma.txt", cluster_gamma)
+
+    print("gen_subset_dopt: wrote all.selection.dat, dopt_gamma_dist.pdf, dopt_cluster_gamma.txt")
 
 
 
