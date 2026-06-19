@@ -31,6 +31,7 @@ class restart:
         self.ALL_QMJOBS         = False
         self.ALL_FAILED_QMJOBS  = False 
         self.THIS_ALC           = False
+        self.DOPT_AL_COMPLETE   = False
         
         self.restart_stream     = None
     
@@ -41,6 +42,10 @@ class restart:
             ifstream = open("restart.dat",'r')
             contents = ifstream.readlines()
             ifstream.close()
+
+            full_restart_text = "\n".join(contents)
+            if "DOPT_AL_COMPLETE: TRUE" in full_restart_text:
+                self.DOPT_AL_COMPLETE = True
             
             # Check if empty
 
@@ -107,7 +112,8 @@ class restart:
             print("    self.INIT_QMJOB         ",self.INIT_QMJOB)
             print("    self.ALL_QMJOBS         ",self.ALL_QMJOBS)
             print("    self.ALL_FAILED_QMJOBS  ",self.ALL_FAILED_QMJOBS)
-            print("    self.THIS_ALC           ",self.THIS_ALC)    
+            print("    self.THIS_ALC           ",self.THIS_ALC)
+            print("    self.DOPT_AL_COMPLETE   ",self.DOPT_AL_COMPLETE)
             print("")
             
             # Open the restart file for writing, in append mode
@@ -162,6 +168,10 @@ class restart:
         ALC_LIST = sorted(set(ALC_LIST)) # Ascending sort preserving only unique values
 
         ALC_LIST = [str(a) for a in ALC_LIST]
+
+        if self.DOPT_AL_COMPLETE:
+            print("Active learning already complete (D-optimality gamma-threshold convergence).")
+            return []
         
         # Check if restart file was empty (i.e. self.last_ALC never got updated from -1)
         

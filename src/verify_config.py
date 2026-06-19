@@ -90,6 +90,7 @@ def print_help():
     PARAM.append("DO_DOPT");                        VARTYP.append("bool");          DETAILS.append("If true (and DO_CLUSTER is true), use D-optimality (maxvol) for cluster downselection instead of MC energy histogram; skips ChIMES dumb-energy calculation")
     PARAM.append("DOPT_GAMMA_MIN");                 VARTYP.append("float");         DETAILS.append("Lower gamma threshold for D-optimality cluster selection (default: 3.0)")
     PARAM.append("DOPT_GAMMA_MAX");                 VARTYP.append("float");         DETAILS.append("Upper gamma threshold for D-optimality cluster selection (default: 10.0)")
+    PARAM.append("DOPT_STOP_ON_EMPTY");             VARTYP.append("bool");          DETAILS.append("If true, stop active learning when D-opt selects zero clusters above the gamma threshold (default: True)")
     PARAM.append("CALC_REPO_ENER_CENT_QUEUE");      VARTYP.append("str");           DETAILS.append("Queue to submit cluster ChIMES \"dumb\" energy calculations for central repository clusters to")
     PARAM.append("CALC_REPO_ENER_CENT_TIME");       VARTYP.append("str");           DETAILS.append("Walltime for ChIMES \"dumb\" energy calculations for central repository clusters")
     PARAM.append("CALC_REPO_ENER_QUEUE");           VARTYP.append("str");           DETAILS.append("Queue to submit cluster ChIMES \"dumb\" energy calculations for candidate clusters to")
@@ -1544,6 +1545,13 @@ def verify(user_config):
                 print("         Will use a value of 10.0")
 
                 user_config.DOPT_GAMMA_MAX = 10.0
+
+            if not hasattr(user_config,'DOPT_STOP_ON_EMPTY'):
+
+                print("WARNING: Option config.DOPT_STOP_ON_EMPTY was not set")
+                print("         Will use a value of True")
+
+                user_config.DOPT_STOP_ON_EMPTY = True
 
         if not hasattr(user_config,'CALC_REPO_ENER_CENT_QUEUE'):
 

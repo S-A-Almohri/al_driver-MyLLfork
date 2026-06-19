@@ -230,6 +230,9 @@ def main(args):
     for THIS_ALC in ALC_LIST:
 
         THIS_ALC = int(THIS_ALC)
+
+        if restart_controller.DOPT_AL_COMPLETE:
+            break
                 
         # Let the ALC process know whether this is a restarted cycle or a completely new cycle
         
@@ -493,7 +496,7 @@ def main(args):
                 gen_selections.cleanup_repo(THIS_ALC)
 
                 if config.DO_DOPT:
-                    gen_selections.gen_subset_dopt(
+                    n_dopt_sel = gen_selections.gen_subset_dopt(
                             gamma_min      = config.DOPT_GAMMA_MIN,
                             gamma_max      = config.DOPT_GAMMA_MAX,
                             job_executable = config.CHIMES_LSQ,
@@ -512,6 +515,7 @@ def main(args):
                             nbins    = config.MEM_BINS, # Number of histogram bins
                             ecut     = config.MEM_ECUT, # Maximum energy to consider
                             seed     = config.SEED    ) # Seed for random number generator
+                    n_dopt_sel = None
 
                 gen_selections.populate_repo(THIS_ALC)
 
@@ -520,6 +524,16 @@ def main(args):
                 restart_controller.update_file("CLU_SELECTION: COMPLETE" + '\n')
                 
                 helpers.email_user(config.DRIVER_DIR, EMAIL_ADD, "ALC-" + str(THIS_ALC) + " status: " + "CLU_SELECTION: COMPLETE ")
+
+                if (config.DO_DOPT and n_dopt_sel == 0
+                        and getattr(config, 'DOPT_STOP_ON_EMPTY', True)):
+                    if THIS_ALC == 0:
+                        print("ERROR (gen_subset_dopt): No clusters selected at ALC-0.")
+                        print("Cannot continue active learning without an initial selection.")
+                        exit(1)
+                    gen_selections.finish_dopt_al_convergence(
+                        restart_controller, THIS_ALC, EMAIL_ADD, config.DRIVER_DIR)
+                    break
                 
             else:
                 restart_controller.update_file("CLU_SELECTION: COMPLETE" + '\n')
@@ -1078,7 +1092,7 @@ def main(args):
                     # Generate cluster sub-selection and store in central repository
 
                     if config.DO_DOPT:
-                        gen_selections.gen_subset_dopt(
+                        n_dopt_sel = gen_selections.gen_subset_dopt(
                                 gamma_min      = config.DOPT_GAMMA_MIN,
                                 gamma_max      = config.DOPT_GAMMA_MAX,
                                 job_executable = config.CHIMES_LSQ,
@@ -1097,12 +1111,23 @@ def main(args):
                                 nsweep    = config.MEM_CYCL, # Number of MC sweeps
                                 nbins     = config.MEM_BINS, # Number of histogram bins
                                 ecut      = config.MEM_ECUT) # Maximum energy to consider
+                        n_dopt_sel = None
 
                     gen_selections.populate_repo(THIS_ALC)
 
                     restart_controller.update_file("CLU_SELECTION: COMPLETE" + '\n')
 
                     helpers.email_user(config.DRIVER_DIR, EMAIL_ADD, "ALC-" + str(THIS_ALC) + " status: " + "CLU_SELECTION: COMPLETE ")
+
+                    if (config.DO_DOPT and n_dopt_sel == 0
+                            and getattr(config, 'DOPT_STOP_ON_EMPTY', True)):
+                        if THIS_ALC == 0:
+                            print("ERROR (gen_subset_dopt): No clusters selected at ALC-0.")
+                            print("Cannot continue active learning without an initial selection.")
+                            exit(1)
+                        gen_selections.finish_dopt_al_convergence(
+                            restart_controller, THIS_ALC, EMAIL_ADD, config.DRIVER_DIR)
+                        break
                 else:
                     restart_controller.update_file("CLU_SELECTION: COMPLETE" + '\n')
                                      

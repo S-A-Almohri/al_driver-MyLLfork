@@ -93,6 +93,10 @@ DO_DOPT = True
 DOPT_GAMMA_MIN = 3.0
 DOPT_GAMMA_MAX = 10.0
 
+# Stop active learning when D-opt finds no clusters above the gamma threshold.
+# Skips QM submission and records convergence in restart.dat.
+DOPT_STOP_ON_EMPTY = True
+
 # MEM_ECUT is still used as a pre-filter if DO_DOPT is False; kept here for
 # easy toggling between methods.
 MEM_ECUT = 4000.0

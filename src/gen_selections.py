@@ -792,6 +792,9 @@ def gen_subset_dopt(**kwargs):
            [gamma_min, gamma_max].
         7. Write all.xyzlist.dat and all.selection.dat; save diagnostic PDF.
 
+    Returns:
+        int: Number of clusters selected for DFT labeling.
+
     Notes:
         - Requires maxvolpy: pip install maxvolpy
         - Expects xyzlist.dat and ts_xyzlist.dat in the CWD (from cluster.list_clusters)
@@ -1049,6 +1052,7 @@ def gen_subset_dopt(**kwargs):
               "Consider adjusting DOPT_GAMMA_MIN / DOPT_GAMMA_MAX.")
 
     np.savetxt("all.selection.dat", selected.astype(int), fmt='%5d')
+    n_selected = len(selected)
 
     ################################
     # 11. Diagnostic plots
@@ -1072,6 +1076,40 @@ def gen_subset_dopt(**kwargs):
     np.savetxt("dopt_cluster_gamma.txt", cluster_gamma)
 
     print("gen_subset_dopt: wrote all.selection.dat, dopt_gamma_dist.pdf, dopt_cluster_gamma.txt")
+
+    return n_selected
+
+
+def finish_dopt_al_convergence(restart_controller, THIS_ALC, email_add, driver_dir):
+    """
+    Gracefully terminate active learning when D-opt finds no clusters above
+    the gamma threshold. Skips QM labeling for the current cycle and records
+    convergence in restart.dat so later driver invocations do not continue.
+    """
+
+    print("")
+    print("=" * 72)
+    print("D-optimality convergence reached at ALC-{}".format(THIS_ALC))
+    print("No candidate clusters exceed the gamma threshold.")
+    print("Skipping QM calculations and stopping active learning.")
+    print("=" * 72)
+    print("")
+
+    restart_controller.DOPT_AL_COMPLETE = True
+    restart_controller.update_file("DOPT_AL_COMPLETE: TRUE" + '\n')
+    restart_controller.update_file("THIS_ALC: COMPLETE" + '\n')
+
+    os.chdir("..")
+
+    print("ALC-", THIS_ALC, "stopped: D-opt convergence (no clusters above gamma threshold)")
+
+    helpers.email_user(
+        driver_dir,
+        email_add,
+        "ALC-" + str(THIS_ALC) + " status: D-opt convergence — active learning complete",
+    )
+
+    return True
 
 
 
