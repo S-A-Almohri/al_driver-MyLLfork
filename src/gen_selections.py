@@ -772,6 +772,125 @@ def _modify_fm_setup_for_descriptors(src_fm_setup, dst_fm_setup, n_total_frames)
         f.writelines(out)
 
 
+def _read_fm_setup_value(fm_setup_path, key):
+    """
+    Reads the value on the line following a '# KEY #' block in fm_setup.in.
+    Returns None if the key is absent.
+    """
+    if not os.path.exists(fm_setup_path):
+        return None
+
+    read_next = False
+    with open(fm_setup_path, 'r') as f:
+        for line in f:
+            if read_next:
+                val = line.strip()
+                return val if val else None
+            if key in line and line.strip().startswith('#'):
+                read_next = True
+    return None
+
+
+def _read_fm_setup_bool(fm_setup_path, key):
+    """Returns True unless fm_setup value is explicitly false-like."""
+    val = _read_fm_setup_value(fm_setup_path, key)
+    if val is None:
+        return False
+    return val.lower() not in ("false", "no", "0")
+
+
+def _force_row_indices_from_traj(fm_setup_path, traj_list_path):
+    """
+    Builds force-row indices by walking traj_list.dat frame order.
+
+    When FITENER is enabled, skips the three energy rows appended after each
+    frame's 3*n_atoms force rows. Returns (force_indices, total_A_rows) or
+    (None, None) on failure.
+    """
+    if not os.path.exists(traj_list_path):
+        return None, None
+
+    gen_ff_dir = os.path.dirname(fm_setup_path)
+    n_files    = int(helpers.head(traj_list_path, 1)[0].split()[0])
+    traj_lines = helpers.head(traj_list_path, n_files + 1)[1:]
+
+    indices    = []
+    row_offset = 0
+
+    for line in traj_lines:
+        parts     = line.split()
+        traj_file = parts[1] if len(parts) > 1 else parts[0]
+        if not os.path.isabs(traj_file):
+            traj_file = os.path.join(gen_ff_dir, traj_file)
+
+        if not os.path.isfile(traj_file):
+            print("WARNING (gen_subset_dopt): traj file {} not found; skipping.".format(traj_file))
+            continue
+
+        for n_atoms in helpers.list_natoms(traj_file):
+            indices.extend(range(row_offset, row_offset + 3 * n_atoms))
+            row_offset += 3 * n_atoms + 3   # skip 3 energy rows per frame
+
+    if row_offset == 0:
+        return None, None
+    return indices, row_offset
+
+
+def _strip_energy_rows_from_A(A, fm_setup_path=None, traj_list_path=None):
+    """
+    Returns force rows from A, skipping FITENER energy rows when present.
+
+    The on-disk A matrix used for fitting is never modified.
+    """
+    if not fm_setup_path or not _read_fm_setup_bool(fm_setup_path, "FITENER"):
+        return A
+
+    if traj_list_path is None:
+        traj_list_path = os.path.join(os.path.dirname(fm_setup_path), "traj_list.dat")
+
+    n_rows = A.shape[0]
+    force_indices, total_a_rows = _force_row_indices_from_traj(fm_setup_path, traj_list_path)
+
+    if force_indices is None:
+        print("ERROR (gen_subset_dopt): FITENER is enabled but traj_list.dat "
+              "could not be used to locate force rows.")
+        exit()
+
+    if total_a_rows != n_rows:
+        print("ERROR (gen_subset_dopt): traj_list implies {} A rows but matrix has {}.".format(
+            total_a_rows, n_rows))
+        exit()
+
+    print("gen_subset_dopt: stripped energy rows; using {} / {} A rows for D-opt".format(
+        len(force_indices), n_rows))
+    return A[np.array(force_indices, dtype=int)]
+
+
+def _a_to_a_atomic(A, fm_setup_path=None, traj_list_path=None, label=""):
+    """
+    Converts a ChIMES A matrix to atomic form for D-optimality.
+
+    Strips FITENER energy rows when needed, then hstacks (fx, fy, fz) per atom.
+    """
+    A = np.asarray(A, dtype=float)
+    if A.ndim == 1:
+        A = A.reshape(-1, 1)
+
+    A_force = _strip_energy_rows_from_A(A, fm_setup_path, traj_list_path)
+
+    n_force_rows, n_feat = A_force.shape
+
+    if n_force_rows % 3 != 0:
+        print("ERROR (gen_subset_dopt): {} A matrix has {} force rows, not divisible by 3.".format(
+            label, n_force_rows))
+        print("       Check FITENER settings and traj_list alignment.")
+        exit()
+
+    n_atoms  = n_force_rows // 3
+    A_atomic = np.array([np.hstack(A_force[3 * i : 3 * (i + 1), :]) for i in range(n_atoms)])
+    return A_atomic, n_feat
+
+
 def gen_subset_dopt(**kwargs):
     """
     Selects candidate clusters using D-optimality (maxvol algorithm).
@@ -781,7 +900,9 @@ def gen_subset_dopt(**kwargs):
     Algorithm:
         1. Build an atomic design matrix A_atomic from the reference GEN_FF/A.txt
            (or GEN_FF/A_comb.txt) by hstacking every three consecutive force rows
-           (fx_i, fy_i, fz_i) into one row per atom.
+           (fx_i, fy_i, fz_i) into one row per atom. When FITENER is enabled,
+           the three energy rows per frame are skipped; the on-disk A matrix is
+           not modified.
         2. Run maxvol on A_atomic to find the D-optimal subset (indices piv) and
            compute the inverse of the square submatrix A_atomic[piv].
         3. Submit a chimes_lsq job to generate descriptors for the candidate clusters
@@ -942,20 +1063,16 @@ def gen_subset_dopt(**kwargs):
 
     print("gen_subset_dopt: loading reference A matrix from", ref_amat_path)
 
+    gen_ff_dir     = os.path.dirname(args["fm_setup"])
+    traj_list_path = os.path.join(gen_ff_dir, "traj_list.dat")
+
     A_ref = np.loadtxt(ref_amat_path)
 
-    if A_ref.ndim == 1:
-        A_ref = A_ref.reshape(-1, 1)
-
-    n_ref_rows, n_feat = A_ref.shape
-
-    if n_ref_rows % 3 != 0:
-        print("ERROR (gen_subset_dopt): Reference A matrix has {} rows, not divisible by 3.".format(n_ref_rows))
-        print("       Ensure GEN_FF/A.txt is from a force-only fit.")
-        exit()
-
-    n_atoms_ref   = n_ref_rows // 3
-    A_atomic_ref  = np.array([np.hstack(A_ref[3*i : 3*(i+1), :]) for i in range(n_atoms_ref)])
+    A_atomic_ref, n_feat = _a_to_a_atomic(
+        A_ref,
+        fm_setup_path=args["fm_setup"],
+        traj_list_path=traj_list_path if os.path.exists(traj_list_path) else None,
+        label="reference")
 
     print("gen_subset_dopt: A_atomic_ref shape:", A_atomic_ref.shape)
     np.savetxt("A_atomic.txt", A_atomic_ref)
@@ -997,10 +1114,11 @@ def gen_subset_dopt(**kwargs):
 
     A_cand = np.loadtxt(cand_amat_path)
 
-    if A_cand.ndim == 1:
-        A_cand = A_cand.reshape(-1, 1)
-
-    n_cand_rows, n_feat_cand = A_cand.shape
+    cand_fm_setup = os.path.join(WORK_DIR, "fm_setup.in")
+    A_atomic_cand, n_feat_cand = _a_to_a_atomic(
+        A_cand,
+        fm_setup_path=cand_fm_setup,
+        label="candidate")
 
     if n_feat_cand != n_feat:
         print("ERROR (gen_subset_dopt): Candidate A matrix has {} features but reference has {}.".format(
@@ -1008,14 +1126,9 @@ def gen_subset_dopt(**kwargs):
         print("       Ensure the same fm_setup.in topology/cutoffs are used.")
         exit()
 
-    if n_cand_rows % 3 != 0:
-        print("ERROR (gen_subset_dopt): Candidate A matrix has {} rows, not divisible by 3.".format(n_cand_rows))
-        exit()
-
-    n_atoms_cand   = n_cand_rows // 3
-    A_atomic_cand  = np.array([np.hstack(A_cand[3*i : 3*(i+1), :]) for i in range(n_atoms_cand)])
-
     print("gen_subset_dopt: A_atomic_cand shape:", A_atomic_cand.shape)
+
+    n_atoms_cand = A_atomic_cand.shape[0]
 
     ################################
     # 9. Compute per-atom gamma, aggregate to per-cluster max gamma
