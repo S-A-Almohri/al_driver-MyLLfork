@@ -59,8 +59,8 @@ def get_repo_energies(*argv, **kwargs):
 
     # Grab the submit scripts from the utitilities folder
 
-    helpers.run_bash_cmnd("cp " + args["driver_dir"] + "/../utilities/new-get_dumb_ener.sh       .")
-    helpers.run_bash_cmnd("cp " + args["driver_dir"] + "/../utilities/new-get_dumb_ener_subjob.sh .")
+    helpers.run_bash_cmnd("cp " + args["driver_dir"] + "/utilities/new-get_dumb_ener.sh       .")
+    helpers.run_bash_cmnd("cp " + args["driver_dir"] + "/utilities/new-get_dumb_ener_subjob.sh .")
 
     # Grab the run_md.base file, prepare for this job
     

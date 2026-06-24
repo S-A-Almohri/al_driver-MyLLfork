@@ -596,7 +596,7 @@ def post_process(*argv, **kwargs):
             # Figure out the temperature
             
             
-            tmpfile = ''.join(outcar_list[j].split("OUTCAR"))+"POSCAR"
+            tmpfile = outcar_list[j][:-len(".OUTCAR")] + ".POSCAR"
             tmp_temp =  helpers.head(tmpfile,1)[0].split()[-2]
             
             tmpfile = outcar_list[j]
