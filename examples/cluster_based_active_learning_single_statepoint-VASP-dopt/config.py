@@ -97,6 +97,15 @@ DOPT_GAMMA_MAX = 10.0
 # Skips QM submission and records convergence in restart.dat.
 DOPT_STOP_ON_EMPTY = True
 
+# How the pseudo A matrix (A_atomic) is built before maxvol:
+#   False (default) - hstack each atom's three force rows (fx, fy, fz) into a
+#                     single row of width 3*n_feat; maxvol/gamma operate per atom.
+#   True            - leave the A matrix as-is: each force component row is kept
+#                     separate (width n_feat), so each atom contributes three
+#                     rows; maxvol/gamma operate per force component.
+# Energy (FITENER) rows are stripped either way.
+DO_COMPONENT = False
+
 # MEM_ECUT is still used as a pre-filter if DO_DOPT is False; kept here for
 # easy toggling between methods.
 MEM_ECUT = 4000.0

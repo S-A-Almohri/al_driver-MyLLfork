@@ -845,11 +845,19 @@ def _read_amat_nfeat(amat_path):
         return len(_parse_a_line(f.readline()))
 
 
-def _fill_a_atomic_from_frames(fstream, A_atomic, atom_offset, frame_natoms, fitener):
+def _fill_a_atomic_from_frames(fstream, A_atomic, row_offset, frame_natoms, fitener,
+                               component=False):
     """
-    Read force rows from an open A matrix stream and write hstacked atomic rows.
+    Read force rows from an open A matrix stream and write rows into A_atomic.
 
-    Returns the updated atom_offset.
+    If component is False (default), the three force rows of each atom
+    (fx, fy, fz) are hstacked into one row of width 3*n_feat.
+    If component is True, each force row is written as-is (width n_feat), so
+    each atom contributes three separate rows.
+
+    In both cases FITENER energy rows are skipped per frame.
+
+    Returns the updated row_offset.
     """
     energy_skip = 3 if fitener else 0
 
@@ -858,21 +866,31 @@ def _fill_a_atomic_from_frames(fstream, A_atomic, atom_offset, frame_natoms, fit
             fx = _parse_a_line(fstream.readline())
             fy = _parse_a_line(fstream.readline())
             fz = _parse_a_line(fstream.readline())
-            A_atomic[atom_offset] = np.concatenate((fx, fy, fz))
-            atom_offset += 1
+            if component:
+                A_atomic[row_offset    ] = fx
+                A_atomic[row_offset + 1] = fy
+                A_atomic[row_offset + 2] = fz
+                row_offset += 3
+            else:
+                A_atomic[row_offset] = np.concatenate((fx, fy, fz))
+                row_offset += 1
 
         for _ in range(energy_skip):
             fstream.readline()
 
-    return atom_offset
+    return row_offset
 
 
 def _build_a_atomic_from_file(amat_path, fm_setup_path=None, traj_list_path=None,
-                              frame_natoms=None, fitener=None, label=""):
+                              frame_natoms=None, fitener=None, label="",
+                              component=False):
     """
     Stream-build A_atomic from A.txt without loading the full A matrix.
 
     Peak memory is one A_atomic array plus a few descriptor rows at a time.
+
+    If component is True, force rows are kept as-is (each atom yields three rows
+    of width n_feat) rather than hstacked into one row of width 3*n_feat.
     """
     if not os.path.exists(amat_path):
         print("ERROR (gen_subset_dopt): A matrix file not found:", amat_path)
@@ -915,35 +933,48 @@ def _build_a_atomic_from_file(amat_path, fm_setup_path=None, traj_list_path=None
         print("gen_subset_dopt: streaming {} force rows ({} atoms) from {}".format(
             n_rows, n_atoms, amat_path))
 
-    A_atomic   = np.empty((n_atoms, 3 * n_feat), dtype=np.float64)
-    atom_offset = 0
+    if component:
+        n_out_rows = 3 * n_atoms
+        row_width  = n_feat
+    else:
+        n_out_rows = n_atoms
+        row_width  = 3 * n_feat
+
+    A_atomic   = np.empty((n_out_rows, row_width), dtype=np.float64)
+    row_offset = 0
 
     with open(amat_path, 'r') as fstream:
-        atom_offset = _fill_a_atomic_from_frames(
-            fstream, A_atomic, atom_offset, frame_natoms, bool(fitener))
+        row_offset = _fill_a_atomic_from_frames(
+            fstream, A_atomic, row_offset, frame_natoms, bool(fitener), component)
 
-    if atom_offset != n_atoms:
+    if row_offset != n_out_rows:
         print("ERROR (gen_subset_dopt): {} expected {} atomic rows but read {}.".format(
-            label or amat_path, n_atoms, atom_offset))
+            label or amat_path, n_out_rows, row_offset))
         exit()
 
     return A_atomic, n_feat
 
 
-def _compute_cluster_gamma_from_amat(cand_amat_path, inverse_a_subset, all_clusters):
+def _compute_cluster_gamma_from_amat(cand_amat_path, inverse_a_subset, all_clusters,
+                                     component=False):
     """
     Compute per-cluster max gamma by streaming the candidate A matrix.
 
     Avoids building the full A_atomic_cand array in memory.
+
+    If component is True, each force row (fx, fy, fz) is scored on its own
+    against inverse_a_subset (width n_feat); otherwise the three rows are
+    hstacked into one atom row (width 3*n_feat) before scoring.
     """
     cluster_gamma = []
     n_atoms_total = 0
     n_feat        = _read_amat_nfeat(cand_amat_path)
 
-    if inverse_a_subset.shape[0] != 3 * n_feat:
+    expected_width = n_feat if component else 3 * n_feat
+    if inverse_a_subset.shape[0] != expected_width:
         print("ERROR (gen_subset_dopt): inverse_A_subset width {} does not match "
               "candidate descriptor width {}.".format(
-                  inverse_a_subset.shape[0], 3 * n_feat))
+                  inverse_a_subset.shape[0], expected_width))
         exit()
 
     with open(cand_amat_path, 'r') as fstream:
@@ -954,9 +985,14 @@ def _compute_cluster_gamma_from_amat(cand_amat_path, inverse_a_subset, all_clust
                 fx = _parse_a_line(fstream.readline())
                 fy = _parse_a_line(fstream.readline())
                 fz = _parse_a_line(fstream.readline())
-                atomic_row   = np.concatenate((fx, fy, fz))
-                dot_products = atomic_row @ inverse_a_subset
-                cluster_max  = max(cluster_max, float(np.max(dot_products)))
+                if component:
+                    for atomic_row in (fx, fy, fz):
+                        dot_products = atomic_row @ inverse_a_subset
+                        cluster_max  = max(cluster_max, float(np.max(dot_products)))
+                else:
+                    atomic_row   = np.concatenate((fx, fy, fz))
+                    dot_products = atomic_row @ inverse_a_subset
+                    cluster_max  = max(cluster_max, float(np.max(dot_products)))
 
             cluster_gamma.append(cluster_max)
             n_atoms_total += n_atoms
@@ -972,8 +1008,10 @@ def gen_subset_dopt(**kwargs):
 
     Algorithm:
         1. Stream-build A_atomic from the reference GEN_FF/A.txt (or A_comb.txt)
-           without loading the full A matrix into memory. Force rows (fx, fy, fz)
-           are hstacked per atom; FITENER energy rows are skipped per frame.
+           without loading the full A matrix into memory. By default force rows
+           (fx, fy, fz) are hstacked per atom; if component=True they are kept as
+           separate rows (the A matrix is left as-is). FITENER energy rows are
+           skipped per frame in both cases.
         2. Run maxvol on A_atomic to find the D-optimal subset (indices piv) and
            compute the inverse of the square submatrix A_atomic[piv].
         3. Submit a chimes_lsq job to generate descriptors for the candidate clusters
@@ -999,8 +1037,8 @@ def gen_subset_dopt(**kwargs):
     # 0. Set up argument parser
     ################################
 
-    default_keys   = [""]*16
-    default_values = [""]*16
+    default_keys   = [""]*17
+    default_values = [""]*17
 
     default_keys[0 ] = "gamma_min"     ; default_values[0 ] = 3.0
     default_keys[1 ] = "gamma_max"     ; default_values[1 ] = 10.0
@@ -1018,14 +1056,17 @@ def gen_subset_dopt(**kwargs):
     default_keys[13] = "job_email"     ; default_values[13] = True
     default_keys[14] = "job_modules"   ; default_values[14] = ""
     default_keys[15] = "job_executable"; default_values[15] = ""              # path to chimes_lsq
+    default_keys[16] = "component"     ; default_values[16] = False           # keep fx/fy/fz as separate rows (no hstack)
 
     args = dict(list(zip(default_keys, default_values)))
     args.update(kwargs)
 
     GAMMA_MIN = float(args["gamma_min"])
     GAMMA_MAX = float(args["gamma_max"])
+    COMPONENT = bool(args["component"])
 
-    print("gen_subset_dopt: gamma_min={}, gamma_max={}".format(GAMMA_MIN, GAMMA_MAX))
+    print("gen_subset_dopt: gamma_min={}, gamma_max={}, component={}".format(
+        GAMMA_MIN, GAMMA_MAX, COMPONENT))
 
     ################################
     # 1. Read candidate cluster lists
@@ -1140,7 +1181,8 @@ def gen_subset_dopt(**kwargs):
         ref_amat_path,
         fm_setup_path=args["fm_setup"],
         traj_list_path=traj_list_path if os.path.exists(traj_list_path) else None,
-        label="reference")
+        label="reference",
+        component=COMPONENT)
 
     print("gen_subset_dopt: A_atomic_ref shape:", A_atomic_ref.shape)
     np.savetxt("A_atomic.txt", A_atomic_ref)
@@ -1184,7 +1226,7 @@ def gen_subset_dopt(**kwargs):
     ################################
 
     cluster_gamma, n_atoms_cand = _compute_cluster_gamma_from_amat(
-        cand_amat_path, inverse_a_subset, all_clusters)
+        cand_amat_path, inverse_a_subset, all_clusters, component=COMPONENT)
 
     del inverse_a_subset
     gc.collect()
