@@ -92,6 +92,7 @@ def print_help():
     PARAM.append("DOPT_GAMMA_MAX");                 VARTYP.append("float");         DETAILS.append("Upper gamma threshold for D-optimality cluster selection (default: 10.0)")
     PARAM.append("DOPT_STOP_ON_EMPTY");             VARTYP.append("bool");          DETAILS.append("If true, stop active learning when D-opt selects zero clusters above the gamma threshold (default: True)")
     PARAM.append("DO_COMPONENT");                    VARTYP.append("bool");          DETAILS.append("If true (and DO_DOPT is true), keep each force component row (fx, fy, fz) as its own row in the pseudo A matrix instead of hstacking the three into one per-atom row before maxvol (default: False)")
+    PARAM.append("DOPT_RCOND");                      VARTYP.append("float");         DETAILS.append("Relative singular-value cutoff for the pseudo-inverse (pinv) of the D-optimal submatrix; guards against near-singular/rank-deficient inverses. 0 recovers inv-like behavior (default: 1.0e-12)")
     PARAM.append("CALC_REPO_ENER_CENT_QUEUE");      VARTYP.append("str");           DETAILS.append("Queue to submit cluster ChIMES \"dumb\" energy calculations for central repository clusters to")
     PARAM.append("CALC_REPO_ENER_CENT_TIME");       VARTYP.append("str");           DETAILS.append("Walltime for ChIMES \"dumb\" energy calculations for central repository clusters")
     PARAM.append("CALC_REPO_ENER_QUEUE");           VARTYP.append("str");           DETAILS.append("Queue to submit cluster ChIMES \"dumb\" energy calculations for candidate clusters to")
@@ -1563,6 +1564,16 @@ def verify(user_config):
                 print("         Will use a value of False (hstack fx/fy/fz per atom)")
 
                 user_config.DO_COMPONENT = False
+
+            if not hasattr(user_config,'DOPT_RCOND'):
+
+                # Relative singular-value cutoff for the pseudo-inverse of the
+                # D-optimal submatrix (numerical-stability guard).
+
+                print("WARNING: Option config.DOPT_RCOND was not set")
+                print("         Will use a value of 1.0e-12")
+
+                user_config.DOPT_RCOND = 1.0e-12
 
         if not hasattr(user_config,'CALC_REPO_ENER_CENT_QUEUE'):
 
