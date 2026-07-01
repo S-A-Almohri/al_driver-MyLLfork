@@ -31,6 +31,65 @@ Documentation
 
 <hr>
 
+D-Optimality Cluster Selection
+------------------------
+
+When running cluster-based active learning (`DO_CLUSTER = True`), the driver must
+decide which of the many candidate atomic clusters extracted from MD trajectories
+are worth sending to expensive quantum (e.g. VASP) labeling. Two down-selection
+strategies are available:
+
+* **MC energy histogram (default):** `gen_subset()` performs a ChIMES "dumb-energy"
+  calculation for each candidate (`CLUENER_CALC`) and selects clusters that flatten
+  an energy histogram.
+* **D-optimality (maxvol):** `gen_subset_dopt()` selects clusters by *model
+  uncertainty* (extrapolation grade, gamma) using the maxvol algorithm. The
+  ChIMES dumb-energy calculation is skipped entirely.
+
+To enable the D-optimality path, set `DO_DOPT = True` (requires `DO_CLUSTER = True`).
+
+### How it works
+
+1. Stream-build a pseudo design matrix `A_atomic` from the current fit's reference
+   matrix (`GEN_FF/A_comb.txt`, or `A.txt`). Only the force rows are used; FITENER
+   energy rows are stripped. By default each atom's three force rows (`fx, fy, fz`)
+   are hstacked into a single row of width `3*n_feat`; see `DO_COMPONENT` below to
+   keep them separate.
+2. Run **maxvol** (from the `maxvolpy` package) to find the D-optimal square
+   sub-matrix, and invert it to obtain `inverse_A_subset`. This requires a *tall*
+   matrix (more rows than features); add more training data if it is not.
+3. Submit a `chimes_lsq` job to generate descriptors for the candidate clusters.
+4. Compute a per-cluster uncertainty `gamma = max(A_candidate @ inverse_A_subset)`.
+5. Keep clusters whose gamma falls in `[DOPT_GAMMA_MIN, DOPT_GAMMA_MAX]`. Below the
+   minimum, a cluster is already well-represented in the training set; above the
+   maximum, it is too far from the current model's domain of validity.
+6. Write `all.selection.dat` / `all.xyzlist.dat` and diagnostics
+   (`dopt_gamma_dist.pdf`, `dopt_cluster_gamma.txt`).
+
+If no candidate clusters exceed the gamma threshold and `DOPT_STOP_ON_EMPTY = True`,
+active learning is treated as converged: QM labeling is skipped and convergence is
+recorded in `restart.dat` so subsequent driver invocations do not continue. (At
+ALC-0 an empty selection is instead a fatal error, since active learning cannot
+start with nothing selected.)
+
+**Prerequisite:** `pip install maxvolpy`
+
+### Configuration flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `DO_DOPT` | bool | `False` | Use D-optimality (maxvol) for cluster down-selection instead of the MC energy histogram. Requires `DO_CLUSTER = True`. When `True`, the ChIMES dumb-energy calculation (`CLUENER_CALC`) is skipped. |
+| `DOPT_GAMMA_MIN` | float | `3.0` | Lower gamma bound. Clusters below this are considered already well-represented and are excluded. |
+| `DOPT_GAMMA_MAX` | float | `10.0` | Upper gamma bound. Clusters above this are considered too far from the model's domain of validity and are excluded. |
+| `DOPT_STOP_ON_EMPTY` | bool | `True` | Stop active learning (convergence) when D-opt selects zero clusters above the gamma threshold. Skips QM submission and records completion in `restart.dat`. |
+| `DO_COMPONENT` | bool | `False` | Controls how `A_atomic` is built. `False`: hstack each atom's `fx, fy, fz` into one row of width `3*n_feat` (maxvol/gamma operate per atom). `True`: leave the A matrix as-is — each force component row is kept separate (width `n_feat`), so each atom contributes three rows and maxvol/gamma operate per force component. FITENER energy rows are stripped in either case. |
+
+The `DOPT_*` and `DO_COMPONENT` flags are only read when `DO_DOPT = True`. A complete
+worked example is provided in
+[`examples/cluster_based_active_learning_single_statepoint-VASP-dopt/`](examples/cluster_based_active_learning_single_statepoint-VASP-dopt/).
+
+<hr>
+
 Community
 ------------------------
 

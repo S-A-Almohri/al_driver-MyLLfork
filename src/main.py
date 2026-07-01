@@ -499,6 +499,7 @@ def main(args):
                     n_dopt_sel = gen_selections.gen_subset_dopt(
                             gamma_min      = config.DOPT_GAMMA_MIN,
                             gamma_max      = config.DOPT_GAMMA_MAX,
+                            component      = config.DO_COMPONENT,
                             job_executable = config.CHIMES_LSQ,
                             job_nodes      = str(config.CHIMES_BUILD_NODES),
                             job_ppn        = str(config.HPC_PPN),
@@ -1095,6 +1096,7 @@ def main(args):
                         n_dopt_sel = gen_selections.gen_subset_dopt(
                                 gamma_min      = config.DOPT_GAMMA_MIN,
                                 gamma_max      = config.DOPT_GAMMA_MAX,
+                                component      = config.DO_COMPONENT,
                                 job_executable = config.CHIMES_LSQ,
                                 job_nodes      = str(config.CHIMES_BUILD_NODES),
                                 job_ppn        = str(config.HPC_PPN),
