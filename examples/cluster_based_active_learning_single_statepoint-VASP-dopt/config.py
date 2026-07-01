@@ -106,6 +106,15 @@ DOPT_STOP_ON_EMPTY = True
 # Energy (FITENER) rows are stripped either way.
 DO_COMPONENT = False
 
+# Numerical-stability guard for the D-optimal inverse. The pseudo-inverse (pinv)
+# of the maxvol submatrix is always used; DOPT_RCOND is the relative
+# singular-value cutoff (singular values below DOPT_RCOND * largest are dropped),
+# which protects against near-singular / rank-deficient submatrices arising from
+# collinear ChIMES feature columns. Set to 0 to recover pure inv-like behavior.
+# The rank of the design matrix and the submatrix condition number are always
+# reported so ill-conditioning is visible in the log.
+DOPT_RCOND = 1.0e-12
+
 # MEM_ECUT is still used as a pre-filter if DO_DOPT is False; kept here for
 # easy toggling between methods.
 MEM_ECUT = 4000.0

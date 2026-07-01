@@ -56,8 +56,11 @@ To enable the D-optimality path, set `DO_DOPT = True` (requires `DO_CLUSTER = Tr
    are hstacked into a single row of width `3*n_feat`; see `DO_COMPONENT` below to
    keep them separate.
 2. Run **maxvol** (from the `maxvolpy` package) to find the D-optimal square
-   sub-matrix, and invert it to obtain `inverse_A_subset`. This requires a *tall*
-   matrix (more rows than features); add more training data if it is not.
+   sub-matrix, and take its **pseudo-inverse** (`pinv`, cutoff `DOPT_RCOND`) to
+   obtain `inverse_A_subset`. This requires a *tall* matrix (more rows than
+   features); add more training data if it is not. The rank of `A_atomic` and the
+   condition number of the sub-matrix are reported to the log so numerical
+   trouble is visible (see *Numerical stability* below).
 3. Submit a `chimes_lsq` job to generate descriptors for the candidate clusters.
 4. Compute a per-cluster uncertainty `gamma = max(A_candidate @ inverse_A_subset)`.
 5. Keep clusters whose gamma falls in `[DOPT_GAMMA_MIN, DOPT_GAMMA_MAX]`. Below the
@@ -83,10 +86,35 @@ start with nothing selected.)
 | `DOPT_GAMMA_MAX` | float | `10.0` | Upper gamma bound. Clusters above this are considered too far from the model's domain of validity and are excluded. |
 | `DOPT_STOP_ON_EMPTY` | bool | `True` | Stop active learning (convergence) when D-opt selects zero clusters above the gamma threshold. Skips QM submission and records completion in `restart.dat`. |
 | `DO_COMPONENT` | bool | `False` | Controls how `A_atomic` is built. `False`: hstack each atom's `fx, fy, fz` into one row of width `3*n_feat` (maxvol/gamma operate per atom). `True`: leave the A matrix as-is — each force component row is kept separate (width `n_feat`), so each atom contributes three rows and maxvol/gamma operate per force component. FITENER energy rows are stripped in either case. |
+| `DOPT_RCOND` | float | `1.0e-12` | Relative singular-value cutoff for the pseudo-inverse of the D-optimal sub-matrix. Singular values below `DOPT_RCOND × (largest singular value)` are dropped, guarding against near-singular / rank-deficient inverses. Set to `0` to recover pure `inv`-like behavior. |
 
 The `DOPT_*` and `DO_COMPONENT` flags are only read when `DO_DOPT = True`. A complete
 worked example is provided in
 [`examples/cluster_based_active_learning_single_statepoint-VASP-dopt/`](examples/cluster_based_active_learning_single_statepoint-VASP-dopt/).
+
+### Numerical stability
+
+D-optimality via maxvol assumes the design matrix is **full column rank**. ChIMES
+basis sets (e.g. Chebyshev / hierarchical) are frequently near-collinear — which is
+why the fit itself uses regularized regression — and that same collinearity can make
+the maxvol sub-matrix singular or ill-conditioned. A naive `inv()` would not raise an
+error on a near-singular matrix; it would silently return a garbage inverse and
+poison every gamma score.
+
+To guard against this, `gen_subset_dopt()`:
+
+* reports the **rank** of `A_atomic` and warns if it is rank deficient (collinear
+  features);
+* reports the **condition number** of the selected sub-matrix and warns when it is
+  ill-conditioned (`> 1e10`) or near-singular (`> 1e14`);
+* uses a **pseudo-inverse** (`np.linalg.pinv`, cutoff `DOPT_RCOND`) instead of a
+  direct inverse, so degenerate singular directions are truncated rather than
+  amplified.
+
+Note that `DO_COMPONENT` changes the *shape* of the matrix but not the rank of the
+underlying feature columns, so it is **not** a substitute for these guards. If the
+warnings fire persistently, reduce the basis, add training data, or increase
+`DOPT_RCOND`.
 
 <hr>
 

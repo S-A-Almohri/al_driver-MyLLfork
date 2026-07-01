@@ -1012,8 +1012,11 @@ def gen_subset_dopt(**kwargs):
            (fx, fy, fz) are hstacked per atom; if component=True they are kept as
            separate rows (the A matrix is left as-is). FITENER energy rows are
            skipped per frame in both cases.
-        2. Run maxvol on A_atomic to find the D-optimal subset (indices piv) and
-           compute the inverse of the square submatrix A_atomic[piv].
+        2. Run maxvol on A_atomic to find the D-optimal subset (indices piv).
+           Report the rank of A_atomic and the condition number of the square
+           submatrix A_atomic[piv], then compute its pseudo-inverse (pinv, with
+           singular-value cutoff rcond) so that a rank-deficient or near-singular
+           submatrix degrades gracefully instead of producing a garbage inverse.
         3. Submit a chimes_lsq job to generate descriptors for the candidate clusters
            listed in xyzlist.dat and ts_xyzlist.dat.
         4. Stream the candidate A.txt to compute per-cluster max gamma against
@@ -1037,8 +1040,8 @@ def gen_subset_dopt(**kwargs):
     # 0. Set up argument parser
     ################################
 
-    default_keys   = [""]*17
-    default_values = [""]*17
+    default_keys   = [""]*18
+    default_values = [""]*18
 
     default_keys[0 ] = "gamma_min"     ; default_values[0 ] = 3.0
     default_keys[1 ] = "gamma_max"     ; default_values[1 ] = 10.0
@@ -1057,6 +1060,7 @@ def gen_subset_dopt(**kwargs):
     default_keys[14] = "job_modules"   ; default_values[14] = ""
     default_keys[15] = "job_executable"; default_values[15] = ""              # path to chimes_lsq
     default_keys[16] = "component"     ; default_values[16] = False           # keep fx/fy/fz as separate rows (no hstack)
+    default_keys[17] = "rcond"         ; default_values[17] = 1.0e-12          # pinv singular-value cutoff (relative); 0 => inv-like
 
     args = dict(list(zip(default_keys, default_values)))
     args.update(kwargs)
@@ -1064,9 +1068,10 @@ def gen_subset_dopt(**kwargs):
     GAMMA_MIN = float(args["gamma_min"])
     GAMMA_MAX = float(args["gamma_max"])
     COMPONENT = bool(args["component"])
+    RCOND     = float(args["rcond"])
 
-    print("gen_subset_dopt: gamma_min={}, gamma_max={}, component={}".format(
-        GAMMA_MIN, GAMMA_MAX, COMPONENT))
+    print("gen_subset_dopt: gamma_min={}, gamma_max={}, component={}, rcond={}".format(
+        GAMMA_MIN, GAMMA_MAX, COMPONENT, RCOND))
 
     ################################
     # 1. Read candidate cluster lists
@@ -1204,14 +1209,46 @@ def gen_subset_dopt(**kwargs):
         print("       maxvol requires a tall matrix. Add more training data.")
         exit()
 
+    # Numerical-stability diagnostic on the full atomic design matrix.
+    # A rank-deficient A_atomic_ref (collinear ChIMES feature columns) means no
+    # square submatrix is nonsingular, so the D-optimal inverse -- and every
+    # gamma score derived from it -- is unreliable. Report it loudly.
+    ref_rank = np.linalg.matrix_rank(A_atomic_ref)
+    if ref_rank < n_cols_atomic:
+        print("WARNING (gen_subset_dopt): A_atomic_ref is rank deficient "
+              "(rank {} < {} columns).".format(ref_rank, n_cols_atomic))
+        print("       The ChIMES feature columns are linearly dependent; gamma "
+              "scores may be unreliable. Consider reducing the basis, adding "
+              "training data, or raising DOPT_RCOND.")
+    else:
+        print("gen_subset_dopt: A_atomic_ref full column rank ({} == {}).".format(
+            ref_rank, n_cols_atomic))
+
     print("gen_subset_dopt: running maxvol...")
     piv, _ = maxvol(A_atomic_ref, 1.0)
 
     a_subset = A_atomic_ref[piv]
+
+    # Condition number of the selected D-optimal submatrix. A very large value
+    # means near-singularity: np.linalg.inv would not raise but would return a
+    # garbage inverse, so we use a pseudo-inverse (pinv) instead, which truncates
+    # singular values below RCOND * (largest singular value).
+    cond_subset = np.linalg.cond(a_subset)
+    print("gen_subset_dopt: D-optimal submatrix condition number = {:.3e}".format(
+        cond_subset))
+    if not np.isfinite(cond_subset) or cond_subset > 1.0e14:
+        print("WARNING (gen_subset_dopt): D-optimal submatrix is near-singular "
+              "(cond = {:.3e}). Falling back to pinv; gamma scores may be "
+              "unreliable.".format(cond_subset))
+    elif cond_subset > 1.0e10:
+        print("WARNING (gen_subset_dopt): D-optimal submatrix is ill-conditioned "
+              "(cond = {:.3e}).".format(cond_subset))
+
     try:
-        inverse_a_subset = np.linalg.inv(a_subset)
+        inverse_a_subset = np.linalg.pinv(a_subset, rcond=RCOND)
     except np.linalg.LinAlgError:
-        print("ERROR (gen_subset_dopt): D-optimal submatrix is singular.")
+        print("ERROR (gen_subset_dopt): pseudo-inverse of D-optimal submatrix "
+              "failed to converge.")
         exit()
 
     del a_subset
