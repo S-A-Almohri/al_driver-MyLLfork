@@ -50,19 +50,23 @@ To enable the D-optimality path, set `DO_DOPT = True` (requires `DO_CLUSTER = Tr
 
 ### How it works
 
-1. Stream-build a pseudo design matrix `A_atomic` from the current fit's reference
-   matrix (`GEN_FF/A_comb.txt`, or `A.txt`). Only the force rows are used; FITENER
-   energy rows are stripped. By default each atom's three force rows (`fx, fy, fz`)
-   are hstacked into a single row of width `3*n_feat`; see `DO_COMPONENT` below to
-   keep them separate.
-2. Run **maxvol** (from the `maxvolpy` package) to find the D-optimal square
-   sub-matrix, and take its **pseudo-inverse** (`pinv`, cutoff `DOPT_RCOND`) to
-   obtain `inverse_A_subset`. This requires a *tall* matrix (more rows than
-   features); add more training data if it is not. The rank of `A_atomic` and the
-   condition number of the sub-matrix are reported to the log so numerical
-   trouble is visible (see *Numerical stability* below).
-3. Submit a `chimes_lsq` job to generate descriptors for the candidate clusters.
-4. Compute a per-cluster uncertainty `gamma = max(A_candidate @ inverse_A_subset)`.
+1. Prepare candidate-cluster inputs for a `chimes_lsq` descriptor job
+   (`DOPT_DESCRIPTORS/`).
+2. Submit **two Slurm jobs in parallel** (neither runs maxvol on the head/login node):
+   * **Descriptor job:** `chimes_lsq` builds the candidate design matrix
+     (`DOPT_DESCRIPTORS/A.txt`).
+   * **Maxvol job:** `src/run_dopt_maxvol.py` stream-builds `A_atomic` from the
+     current fit's reference matrix (`GEN_FF/A_comb.txt` or `A.txt`; force rows
+     only; FITENER energy rows stripped), runs **maxvol**, and writes the
+     **pseudo-inverse** (`pinv`, cutoff `DOPT_RCOND`) to
+     `DOPT_MAXVOL/inverse_A_subset.npy`. By default each atom's three force rows
+     (`fx, fy, fz`) are hstacked into one row of width `3*n_feat`; see
+     `DO_COMPONENT` to keep them separate. Maxvol needs a *tall* matrix (more
+     rows than features). Rank / condition diagnostics are written to
+     `DOPT_MAXVOL/dopt_maxvol.log`.
+3. Wait until **both** jobs finish.
+4. On the driver process (lightweight), stream-score each candidate cluster:
+   `gamma = max(A_candidate @ inverse_A_subset)`.
 5. Keep clusters whose gamma falls in `[DOPT_GAMMA_MIN, DOPT_GAMMA_MAX]`. Below the
    minimum, a cluster is already well-represented in the training set; above the
    maximum, it is too far from the current model's domain of validity.
@@ -75,7 +79,7 @@ recorded in `restart.dat` so subsequent driver invocations do not continue. (At
 ALC-0 an empty selection is instead a fatal error, since active learning cannot
 start with nothing selected.)
 
-**Prerequisite:** `pip install maxvolpy`
+**Prerequisite:** `pip install maxvolpy` on the compute node that runs the maxvol job.
 
 ### Configuration flags
 
@@ -87,10 +91,17 @@ start with nothing selected.)
 | `DOPT_STOP_ON_EMPTY` | bool | `True` | Stop active learning (convergence) when D-opt selects zero clusters above the gamma threshold. Skips QM submission and records completion in `restart.dat`. |
 | `DO_COMPONENT` | bool | `False` | Controls how `A_atomic` is built. `False`: hstack each atom's `fx, fy, fz` into one row of width `3*n_feat` (maxvol/gamma operate per atom). `True`: leave the A matrix as-is — each force component row is kept separate (width `n_feat`), so each atom contributes three rows and maxvol/gamma operate per force component. FITENER energy rows are stripped in either case. |
 | `DOPT_RCOND` | float | `1.0e-12` | Relative singular-value cutoff for the pseudo-inverse of the D-optimal sub-matrix. Singular values below `DOPT_RCOND × (largest singular value)` are dropped, guarding against near-singular / rank-deficient inverses. Set to `0` to recover pure `inv`-like behavior. |
+| `DOPT_MAXVOL_NODES` | int | `CHIMES_BUILD_NODES` | Nodes for the maxvol Slurm job. |
+| `DOPT_MAXVOL_PPN` | int | `HPC_PPN` | Processors per node for the maxvol Slurm job. |
+| `DOPT_MAXVOL_TIME` | str | `CHIMES_BUILD_TIME` | Walltime for the maxvol Slurm job. |
+| `DOPT_MAXVOL_QUEUE` | str | `CHIMES_BUILD_QUEUE` | Queue for the maxvol Slurm job. |
+| `DOPT_MAXVOL_MODULES` | str | `CHIMES_LSQ_MODULES` | Modules for the maxvol job (must provide numpy + maxvolpy). |
+| `DOPT_MAXVOL_MEM` | str | `""` | Memory in GB for the maxvol job (used on UM-ARC via `--mem-per-cpu`). |
 
 The `DOPT_*` and `DO_COMPONENT` flags are only read when `DO_DOPT = True`. A complete
 worked example is provided in
-[`examples/cluster_based_active_learning_single_statepoint-VASP-dopt/`](examples/cluster_based_active_learning_single_statepoint-VASP-dopt/).
+[`examples/cluster_based_active_learning_single_statepoint-VASP/`](examples/cluster_based_active_learning_single_statepoint-VASP/)
+(set `DO_DOPT = True` in `config.py`).
 
 ### Numerical stability
 
@@ -101,7 +112,7 @@ the maxvol sub-matrix singular or ill-conditioned. A naive `inv()` would not rai
 error on a near-singular matrix; it would silently return a garbage inverse and
 poison every gamma score.
 
-To guard against this, `gen_subset_dopt()`:
+To guard against this, the maxvol compute job (`run_dopt_maxvol.py`):
 
 * reports the **rank** of `A_atomic` and warns if it is rank deficient (collinear
   features);

@@ -1007,20 +1007,16 @@ def gen_subset_dopt(**kwargs):
     Usage: gen_subset_dopt(<arguments>)
 
     Algorithm:
-        1. Stream-build A_atomic from the reference GEN_FF/A.txt (or A_comb.txt)
-           without loading the full A matrix into memory. By default force rows
-           (fx, fy, fz) are hstacked per atom; if component=True they are kept as
-           separate rows (the A matrix is left as-is). FITENER energy rows are
-           skipped per frame in both cases.
-        2. Run maxvol on A_atomic to find the D-optimal subset (indices piv).
-           Report the rank of A_atomic and the condition number of the square
-           submatrix A_atomic[piv], then compute its pseudo-inverse (pinv, with
-           singular-value cutoff rcond) so that a rank-deficient or near-singular
-           submatrix degrades gracefully instead of producing a garbage inverse.
-        3. Submit a chimes_lsq job to generate descriptors for the candidate clusters
-           listed in xyzlist.dat and ts_xyzlist.dat.
-        4. Stream the candidate A.txt to compute per-cluster max gamma against
-           inverse_A_subset.
+        1. Prepare candidate-cluster inputs for a chimes_lsq descriptor job
+           (DOPT_DESCRIPTORS/).
+        2. Submit TWO compute-node jobs in parallel:
+             (a) chimes_lsq → candidate design matrix b (A.txt)
+             (b) run_dopt_maxvol.py → A_atomic + maxvol + pinv
+                 (DOPT_MAXVOL/inverse_A_subset.npy)
+           Maxvol is intentionally NOT run on the head/login node.
+        3. Wait until both jobs finish.
+        4. Stream the candidate A.txt against inverse_A_subset to get per-cluster
+           max gamma.
         5. Keep clusters with gamma in [gamma_min, gamma_max].
         6. Write all.xyzlist.dat and all.selection.dat; save diagnostic PDF.
 
@@ -1028,7 +1024,7 @@ def gen_subset_dopt(**kwargs):
         int: Number of clusters selected for DFT labeling.
 
     Notes:
-        - Requires maxvolpy: pip install maxvolpy
+        - Requires maxvolpy on the compute node that runs run_dopt_maxvol.py
         - Expects xyzlist.dat and ts_xyzlist.dat in the CWD (from cluster.list_clusters)
         - Expects GEN_FF/A.txt (or GEN_FF/A_comb.txt) from the current ALC's fit
         - Expects GEN_FF/fm_setup.in to exist (used as template for descriptor job)
@@ -1040,8 +1036,8 @@ def gen_subset_dopt(**kwargs):
     # 0. Set up argument parser
     ################################
 
-    default_keys   = [""]*18
-    default_values = [""]*18
+    default_keys   = [""]*28
+    default_values = [""]*28
 
     default_keys[0 ] = "gamma_min"     ; default_values[0 ] = 3.0
     default_keys[1 ] = "gamma_max"     ; default_values[1 ] = 10.0
@@ -1061,6 +1057,17 @@ def gen_subset_dopt(**kwargs):
     default_keys[15] = "job_executable"; default_values[15] = ""              # path to chimes_lsq
     default_keys[16] = "component"     ; default_values[16] = False           # keep fx/fy/fz as separate rows (no hstack)
     default_keys[17] = "rcond"         ; default_values[17] = 1.0e-12          # pinv singular-value cutoff (relative); 0 => inv-like
+    # Maxvol compute-node job (defaults fall back to descriptor-job settings)
+    default_keys[18] = "driver_dir"         ; default_values[18] = ""         # ALD src parent; locates run_dopt_maxvol.py
+    default_keys[19] = "job_python"         ; default_values[19] = "python3"
+    default_keys[20] = "maxvol_job_name"    ; default_values[20] = "dopt_maxvol"
+    default_keys[21] = "maxvol_job_nodes"   ; default_values[21] = ""          # empty → use job_nodes
+    default_keys[22] = "maxvol_job_ppn"     ; default_values[22] = ""          # empty → use job_ppn
+    default_keys[23] = "maxvol_job_walltime"; default_values[23] = ""          # empty → use job_walltime
+    default_keys[24] = "maxvol_job_queue"   ; default_values[24] = ""          # empty → use job_queue
+    default_keys[25] = "maxvol_job_modules" ; default_values[25] = ""          # empty → use job_modules
+    default_keys[26] = "maxvol_job_mem"     ; default_values[26] = ""          # GB; used on UM-ARC
+    default_keys[27] = "maxvol_job_account" ; default_values[27] = ""          # empty → use job_account
 
     args = dict(list(zip(default_keys, default_values)))
     args.update(kwargs)
@@ -1069,6 +1076,15 @@ def gen_subset_dopt(**kwargs):
     GAMMA_MAX = float(args["gamma_max"])
     COMPONENT = bool(args["component"])
     RCOND     = float(args["rcond"])
+
+    # Resolve maxvol job resource defaults from the descriptor-job settings
+    mv_nodes    = args["maxvol_job_nodes"]    or args["job_nodes"]
+    mv_ppn      = args["maxvol_job_ppn"]      or args["job_ppn"]
+    mv_walltime = args["maxvol_job_walltime"] or args["job_walltime"]
+    mv_queue    = args["maxvol_job_queue"]    or args["job_queue"]
+    mv_modules  = args["maxvol_job_modules"]  if args["maxvol_job_modules"] != "" else args["job_modules"]
+    mv_account  = args["maxvol_job_account"]  or args["job_account"]
+    mv_mem      = args["maxvol_job_mem"]      or None
 
     print("gen_subset_dopt: gamma_min={}, gamma_max={}, component={}, rcond={}".format(
         GAMMA_MIN, GAMMA_MAX, COMPONENT, RCOND))
@@ -1099,7 +1115,27 @@ def gen_subset_dopt(**kwargs):
          if os.path.exists(f) and os.path.getsize(f) > 0])
 
     ################################
-    # 3. Prepare DOPT_DESCRIPTORS work directory
+    # 3. Resolve reference A matrix path (needed by maxvol job)
+    ################################
+
+    if args["amat_path"]:
+        ref_amat_path = args["amat_path"]
+    elif os.path.exists("GEN_FF/A_comb.txt"):
+        ref_amat_path = "GEN_FF/A_comb.txt"
+    else:
+        ref_amat_path = "GEN_FF/A.txt"
+
+    if not os.path.exists(ref_amat_path):
+        print("ERROR (gen_subset_dopt): reference A matrix not found:", ref_amat_path)
+        exit()
+
+    gen_ff_dir     = os.path.dirname(args["fm_setup"])
+    traj_list_path = os.path.join(gen_ff_dir, "traj_list.dat")
+    if not os.path.exists(traj_list_path):
+        traj_list_path = ""
+
+    ################################
+    # 4. Prepare DOPT_DESCRIPTORS work directory
     ################################
 
     WORK_DIR = "DOPT_DESCRIPTORS"
@@ -1122,24 +1158,56 @@ def gen_subset_dopt(**kwargs):
     with open(os.path.join(WORK_DIR, "candidate_traj_list.dat"), 'w') as f:
         f.writelines(traj_list_lines)
 
-    ################################
-    # 4. Write modified fm_setup.in for descriptor generation
-    ################################
-
     _modify_fm_setup_for_descriptors(
         args["fm_setup"],
         os.path.join(WORK_DIR, "fm_setup.in"),
         len(all_clusters))
 
     ################################
-    # 5. Submit chimes_lsq descriptor job, wait
+    # 5. Prepare DOPT_MAXVOL work directory
     ################################
 
+    MAXVOL_DIR = "DOPT_MAXVOL"
+    helpers.run_bash_cmnd("rm -rf " + MAXVOL_DIR)
+    helpers.run_bash_cmnd("mkdir  " + MAXVOL_DIR)
+
+    driver_dir = args["driver_dir"]
+    if not driver_dir:
+        # Fall back to the directory that holds this module (…/src → parent)
+        driver_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    maxvol_script = os.path.join(driver_dir, "src", "run_dopt_maxvol.py")
+    if not os.path.isfile(maxvol_script):
+        print("ERROR (gen_subset_dopt): run_dopt_maxvol.py not found at", maxvol_script)
+        print("       Pass driver_dir=<ALD root> so the maxvol job can be launched.")
+        exit()
+
+    maxvol_outdir = os.path.join(curr_dir, MAXVOL_DIR)
+    maxvol_cmd_parts = [
+        args["job_python"], maxvol_script,
+        "--amat", os.path.join(curr_dir, ref_amat_path),
+        "--outdir", maxvol_outdir,
+        "--rcond", str(RCOND),
+    ]
+    if args["fm_setup"]:
+        maxvol_cmd_parts.extend([
+            "--fm-setup", os.path.join(curr_dir, args["fm_setup"])])
+    if traj_list_path:
+        maxvol_cmd_parts.extend([
+            "--traj-list", os.path.join(curr_dir, traj_list_path)])
+    if COMPONENT:
+        maxvol_cmd_parts.append("--component")
+    maxvol_cmd_parts.extend(["|", "tee", "dopt_maxvol_job.log"])
+    maxvol_job_cmd = " ".join(maxvol_cmd_parts)
+
+    ################################
+    # 6. Submit descriptor + maxvol jobs IN PARALLEL, then wait for both
+    ################################
+
+    print("gen_subset_dopt: submitting descriptor and maxvol jobs in parallel...")
+
     os.chdir(WORK_DIR)
-
-    job_cmd = args["job_executable"] + " fm_setup.in | tee fm_setup.log"
-
-    job_id = helpers.create_and_launch_job(
+    desc_job_cmd = args["job_executable"] + " fm_setup.in | tee fm_setup.log"
+    desc_job_id = helpers.create_and_launch_job(
         job_name       = args["job_name"],
         job_nodes      = str(args["job_nodes"]),
         job_ppn        = str(args["job_ppn"]),
@@ -1148,17 +1216,38 @@ def gen_subset_dopt(**kwargs):
         job_account    = args["job_account"],
         job_system     = args["job_system"],
         job_email      = args["job_email"],
-        job_executable = job_cmd,
+        job_executable = desc_job_cmd,
         job_modules    = args["job_modules"],
+        job_file       = "run_dopt_desc.cmd",
     )
-
     os.chdir(curr_dir)
+    print("gen_subset_dopt: descriptor job id =", desc_job_id)
+
+    os.chdir(MAXVOL_DIR)
+    maxvol_launch_kwargs = dict(
+        job_name       = args["maxvol_job_name"],
+        job_nodes      = str(mv_nodes),
+        job_ppn        = str(mv_ppn),
+        job_walltime   = str(mv_walltime),
+        job_queue      = mv_queue,
+        job_account    = mv_account,
+        job_system     = args["job_system"],
+        job_email      = args["job_email"],
+        job_executable = maxvol_job_cmd,
+        job_modules    = mv_modules,
+        job_file       = "run_dopt_maxvol.cmd",
+    )
+    if mv_mem:
+        maxvol_launch_kwargs["job_mem"] = str(mv_mem)
+    maxvol_job_id = helpers.create_and_launch_job(**maxvol_launch_kwargs)
+    os.chdir(curr_dir)
+    print("gen_subset_dopt: maxvol job id =", maxvol_job_id)
 
     helpers.wait_for_jobs(
-        [job_id],
+        [desc_job_id, maxvol_job_id],
         job_system = args["job_system"],
         verbose    = True,
-        job_name   = "dopt_descriptors")
+        job_name   = "dopt_desc+maxvol")
 
     cand_amat_path = os.path.join(WORK_DIR, "A.txt")
     if not os.path.exists(cand_amat_path):
@@ -1166,100 +1255,23 @@ def gen_subset_dopt(**kwargs):
         print("       Check {}/fm_setup.log for errors.".format(WORK_DIR))
         exit()
 
-    ################################
-    # 6. Load reference A matrix, build A_atomic
-    ################################
-
-    if args["amat_path"]:
-        ref_amat_path = args["amat_path"]
-    elif os.path.exists("GEN_FF/A_comb.txt"):
-        ref_amat_path = "GEN_FF/A_comb.txt"
-    else:
-        ref_amat_path = "GEN_FF/A.txt"
-
-    print("gen_subset_dopt: loading reference A matrix from", ref_amat_path)
-
-    gen_ff_dir     = os.path.dirname(args["fm_setup"])
-    traj_list_path = os.path.join(gen_ff_dir, "traj_list.dat")
-
-    A_atomic_ref, n_feat = _build_a_atomic_from_file(
-        ref_amat_path,
-        fm_setup_path=args["fm_setup"],
-        traj_list_path=traj_list_path if os.path.exists(traj_list_path) else None,
-        label="reference",
-        component=COMPONENT)
-
-    print("gen_subset_dopt: A_atomic_ref shape:", A_atomic_ref.shape)
-    np.savetxt("A_atomic.txt", A_atomic_ref)
-
-    ################################
-    # 7. D-optimal subset via maxvol, compute inverse
-    ################################
-
-    try:
-        from maxvolpy.maxvol import maxvol
-    except ImportError:
-        print("ERROR (gen_subset_dopt): maxvolpy not found. Install with: pip install maxvolpy")
+    inv_path = os.path.join(MAXVOL_DIR, "inverse_A_subset.npy")
+    if not os.path.exists(inv_path):
+        print("ERROR (gen_subset_dopt): Maxvol job did not produce {}.".format(inv_path))
+        print("       Check {}/dopt_maxvol.log (and dopt_maxvol_job.log).".format(MAXVOL_DIR))
         exit()
 
-    n_rows_atomic, n_cols_atomic = A_atomic_ref.shape
-    if n_rows_atomic < n_cols_atomic:
-        print("ERROR (gen_subset_dopt): A_atomic_ref is fat ({} rows < {} cols).".format(
-            n_rows_atomic, n_cols_atomic))
-        print("       maxvol requires a tall matrix. Add more training data.")
-        exit()
+    # Mirror key artifacts into the ALC CWD for continuity with older workflows
+    helpers.run_bash_cmnd("cp " + inv_path + " inverse_A_subset.npy")
+    a_atomic_src = os.path.join(MAXVOL_DIR, "A_atomic.txt")
+    if os.path.exists(a_atomic_src):
+        helpers.run_bash_cmnd("cp " + a_atomic_src + " A_atomic.txt")
 
-    # Numerical-stability diagnostic on the full atomic design matrix.
-    # A rank-deficient A_atomic_ref (collinear ChIMES feature columns) means no
-    # square submatrix is nonsingular, so the D-optimal inverse -- and every
-    # gamma score derived from it -- is unreliable. Report it loudly.
-    ref_rank = np.linalg.matrix_rank(A_atomic_ref)
-    if ref_rank < n_cols_atomic:
-        print("WARNING (gen_subset_dopt): A_atomic_ref is rank deficient "
-              "(rank {} < {} columns).".format(ref_rank, n_cols_atomic))
-        print("       The ChIMES feature columns are linearly dependent; gamma "
-              "scores may be unreliable. Consider reducing the basis, adding "
-              "training data, or raising DOPT_RCOND.")
-    else:
-        print("gen_subset_dopt: A_atomic_ref full column rank ({} == {}).".format(
-            ref_rank, n_cols_atomic))
-
-    print("gen_subset_dopt: running maxvol...")
-    piv, _ = maxvol(A_atomic_ref, 1.0)
-
-    a_subset = A_atomic_ref[piv]
-
-    # Condition number of the selected D-optimal submatrix. A very large value
-    # means near-singularity: np.linalg.inv would not raise but would return a
-    # garbage inverse, so we use a pseudo-inverse (pinv) instead, which truncates
-    # singular values below RCOND * (largest singular value).
-    cond_subset = np.linalg.cond(a_subset)
-    print("gen_subset_dopt: D-optimal submatrix condition number = {:.3e}".format(
-        cond_subset))
-    if not np.isfinite(cond_subset) or cond_subset > 1.0e14:
-        print("WARNING (gen_subset_dopt): D-optimal submatrix is near-singular "
-              "(cond = {:.3e}). Falling back to pinv; gamma scores may be "
-              "unreliable.".format(cond_subset))
-    elif cond_subset > 1.0e10:
-        print("WARNING (gen_subset_dopt): D-optimal submatrix is ill-conditioned "
-              "(cond = {:.3e}).".format(cond_subset))
-
-    try:
-        inverse_a_subset = np.linalg.pinv(a_subset, rcond=RCOND)
-    except np.linalg.LinAlgError:
-        print("ERROR (gen_subset_dopt): pseudo-inverse of D-optimal submatrix "
-              "failed to converge.")
-        exit()
-
-    del a_subset
-    np.save("inverse_A_subset.npy", inverse_a_subset)
-    print("gen_subset_dopt: maxvol complete. {} pivot rows selected.".format(len(piv)))
-
-    del A_atomic_ref
-    gc.collect()
+    print("gen_subset_dopt: both jobs finished; loading inverse_A_subset from", inv_path)
+    inverse_a_subset = np.load(inv_path)
 
     ################################
-    # 8. Stream candidate A matrix, compute per-cluster max gamma
+    # 7. Stream candidate A matrix, compute per-cluster max gamma
     ################################
 
     cluster_gamma, n_atoms_cand = _compute_cluster_gamma_from_amat(
@@ -1273,7 +1285,7 @@ def gen_subset_dopt(**kwargs):
             sum(n for n, _ in all_clusters), n_atoms_cand))
 
     ################################
-    # 9. Select clusters in [gamma_min, gamma_max]
+    # 8. Select clusters in [gamma_min, gamma_max]
     ################################
 
     selected = np.where((cluster_gamma >= GAMMA_MIN) & (cluster_gamma <= GAMMA_MAX))[0]
@@ -1289,7 +1301,7 @@ def gen_subset_dopt(**kwargs):
     n_selected = len(selected)
 
     ################################
-    # 11. Diagnostic plots
+    # 9. Diagnostic plots
     ################################
 
     plt.figure(figsize=(10, 6))
