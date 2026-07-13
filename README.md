@@ -95,8 +95,9 @@ start with nothing selected.)
 | `DOPT_MAXVOL_PPN` | int | `HPC_PPN` | Processors per node for the maxvol Slurm job. |
 | `DOPT_MAXVOL_TIME` | str | `CHIMES_BUILD_TIME` | Walltime for the maxvol Slurm job. |
 | `DOPT_MAXVOL_QUEUE` | str | `CHIMES_BUILD_QUEUE` | Queue for the maxvol Slurm job. |
-| `DOPT_MAXVOL_MODULES` | str | `CHIMES_LSQ_MODULES` | Modules for the maxvol job (must provide numpy + maxvolpy). |
+| `DOPT_MAXVOL_MODULES` | str | `CHIMES_LSQ_MODULES` | Optional `module load` string for the maxvol job. Prefer `DOPT_MAXVOL_PYTHON` for conda/`maxvolpy`. |
 | `DOPT_MAXVOL_MEM` | str | `""` | Memory in GB for the maxvol job (used on UM-ARC via `--mem-per-cpu`). |
+| `DOPT_MAXVOL_PYTHON` | str | `HPC_PYTHON` | Python for the **maxvol job only** (must provide `numpy` + `maxvolpy`), e.g. `.../envs/Pmini/bin/python`. Does not change `HPC_PYTHON` used by the rest of ALD. |
 
 The `DOPT_*` and `DO_COMPONENT` flags are only read when `DO_DOPT = True`. A complete
 worked example is provided in

@@ -14,7 +14,8 @@
 #   The ChIMES dumb-energy calculation (CLUENER_CALC) is skipped entirely.
 #
 # Prerequisites:
-#   pip install maxvolpy   # on the compute node / modules used by DOPT_MAXVOL_MODULES
+#   A python with maxvolpy for the maxvol Slurm job — set DOPT_MAXVOL_PYTHON
+#   (e.g. .../envs/Pmini/bin/python). Keep HPC_PYTHON for the rest of ALD.
 
 ################################
 ##### General options
@@ -123,8 +124,14 @@ DOPT_MAXVOL_NODES   = 1
 DOPT_MAXVOL_PPN     = HPC_PPN
 DOPT_MAXVOL_TIME    = "01:00:00"
 DOPT_MAXVOL_QUEUE   = "pdebug"
-DOPT_MAXVOL_MODULES = ""   # must provide numpy + maxvolpy; falls back to CHIMES_LSQ_MODULES
+DOPT_MAXVOL_MODULES = ""   # optional module load; prefer DOPT_MAXVOL_PYTHON for conda
 # DOPT_MAXVOL_MEM   = "128"  # GB; only applied on UM-ARC via helpers.create_and_launch_job
+
+# Python used ONLY by the maxvol compute job (must import maxvolpy + numpy).
+# Keep this separate from HPC_PYTHON so the rest of ALD can use a different env.
+# Example (Pmini conda env):
+#   DOPT_MAXVOL_PYTHON = "/path-to/CondaEnv/miniconda/envs/Pmini/bin/python"
+DOPT_MAXVOL_PYTHON = HPC_PYTHON  # <-- set to Pmini python before running on the cluster
 
 # MEM_ECUT is still used as a pre-filter if DO_DOPT is False; kept here for
 # easy toggling between methods.

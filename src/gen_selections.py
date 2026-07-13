@@ -1036,8 +1036,8 @@ def gen_subset_dopt(**kwargs):
     # 0. Set up argument parser
     ################################
 
-    default_keys   = [""]*28
-    default_values = [""]*28
+    default_keys   = [""]*29
+    default_values = [""]*29
 
     default_keys[0 ] = "gamma_min"     ; default_values[0 ] = 3.0
     default_keys[1 ] = "gamma_max"     ; default_values[1 ] = 10.0
@@ -1059,7 +1059,7 @@ def gen_subset_dopt(**kwargs):
     default_keys[17] = "rcond"         ; default_values[17] = 1.0e-12          # pinv singular-value cutoff (relative); 0 => inv-like
     # Maxvol compute-node job (defaults fall back to descriptor-job settings)
     default_keys[18] = "driver_dir"         ; default_values[18] = ""         # ALD src parent; locates run_dopt_maxvol.py
-    default_keys[19] = "job_python"         ; default_values[19] = "python3"
+    default_keys[19] = "job_python"         ; default_values[19] = "python3"  # unused by maxvol if maxvol_job_python set
     default_keys[20] = "maxvol_job_name"    ; default_values[20] = "dopt_maxvol"
     default_keys[21] = "maxvol_job_nodes"   ; default_values[21] = ""          # empty → use job_nodes
     default_keys[22] = "maxvol_job_ppn"     ; default_values[22] = ""          # empty → use job_ppn
@@ -1068,6 +1068,7 @@ def gen_subset_dopt(**kwargs):
     default_keys[25] = "maxvol_job_modules" ; default_values[25] = ""          # empty → use job_modules
     default_keys[26] = "maxvol_job_mem"     ; default_values[26] = ""          # GB; used on UM-ARC
     default_keys[27] = "maxvol_job_account" ; default_values[27] = ""          # empty → use job_account
+    default_keys[28] = "maxvol_job_python"  ; default_values[28] = ""          # empty → use job_python; should provide maxvolpy
 
     args = dict(list(zip(default_keys, default_values)))
     args.update(kwargs)
@@ -1085,6 +1086,7 @@ def gen_subset_dopt(**kwargs):
     mv_modules  = args["maxvol_job_modules"]  if args["maxvol_job_modules"] != "" else args["job_modules"]
     mv_account  = args["maxvol_job_account"]  or args["job_account"]
     mv_mem      = args["maxvol_job_mem"]      or None
+    mv_python   = args["maxvol_job_python"]   or args["job_python"]
 
     print("gen_subset_dopt: gamma_min={}, gamma_max={}, component={}, rcond={}".format(
         GAMMA_MIN, GAMMA_MAX, COMPONENT, RCOND))
@@ -1183,7 +1185,7 @@ def gen_subset_dopt(**kwargs):
 
     maxvol_outdir = os.path.join(curr_dir, MAXVOL_DIR)
     maxvol_cmd_parts = [
-        args["job_python"], maxvol_script,
+        mv_python, maxvol_script,
         "--amat", os.path.join(curr_dir, ref_amat_path),
         "--outdir", maxvol_outdir,
         "--rcond", str(RCOND),
