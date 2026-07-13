@@ -100,8 +100,7 @@ start with nothing selected.)
 
 The `DOPT_*` and `DO_COMPONENT` flags are only read when `DO_DOPT = True`. A complete
 worked example is provided in
-[`examples/cluster_based_active_learning_single_statepoint-VASP/`](examples/cluster_based_active_learning_single_statepoint-VASP/)
-(set `DO_DOPT = True` in `config.py`).
+[`examples/cluster_based_active_learning_single_statepoint-VASP-dopt/`](examples/cluster_based_active_learning_single_statepoint-VASP-dopt/).
 
 ### Numerical stability
 

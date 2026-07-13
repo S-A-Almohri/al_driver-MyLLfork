@@ -1,19 +1,5 @@
-# Cluster-based Active Learning (VASP) with optional D-Optimality (maxvol)
-#
-# Set DO_DOPT = True to use gen_subset_dopt() instead of the MC energy-histogram
-# path (gen_subset). When DO_DOPT is True:
-#   1. Prepares candidate-cluster inputs for chimes_lsq.
-#   2. Submits TWO Slurm jobs in parallel:
-#        (a) chimes_lsq → candidate descriptors (DOPT_DESCRIPTORS/A.txt)
-#        (b) run_dopt_maxvol.py → A_atomic + maxvol + pinv
-#            (DOPT_MAXVOL/inverse_A_subset.npy) on a compute node
-#   3. Waits for both jobs, then scores gamma = max(A_cand @ inv_A_ref).
-#   4. Selects clusters whose max gamma falls in [DOPT_GAMMA_MIN, DOPT_GAMMA_MAX].
-#   The ChIMES dumb-energy calculation (CLUENER_CALC) is skipped entirely.
-#
-# Prerequisites for DO_DOPT:
-#   pip install maxvolpy   # on the compute node / modules used by DOPT_MAXVOL_MODULES
-
+# For a seamless run on LLNL-LC (Ruby)
+        
 ################################
 ##### General options
 ################################
@@ -34,7 +20,7 @@ HPC_PYTHON  = "/usr/tce/bin/python3"
 HPC_SYSTEM  = "slurm"
 HPC_PPN     = 56 # Ruby has 56
 
-HPC_EMAIL     = False
+HPC_EMAIL     = False 
 
 ################################
 ##### ChIMES LSQ
@@ -47,11 +33,11 @@ CHIMES_POSTPRC= CHIMES_SRCDIR + "../build/post_proc_chimes_lsq.py"
 
 # Generic weight settings
 
-WEIGHTS_FORCE = [ ["A"], [[1.0  ]] ]
-WEIGHTS_FGAS  = [ ["A"], [[1.0  ]] ]
-WEIGHTS_ENER  = [ ["A"], [[0.3  ]] ]
-WEIGHTS_EGAS  = [ ["A"], [[1.0  ]] ]
-WEIGHTS_STRES = [ ["A"], [[100.0]] ]
+WEIGHTS_FORCE = [ ["A"], [[1.0  ]] ] 
+WEIGHTS_FGAS  = [ ["A"], [[1.0  ]] ] 
+WEIGHTS_ENER  = [ ["A"], [[0.3  ]] ] 
+WEIGHTS_EGAS  = [ ["A"], [[1.0  ]] ] 
+WEIGHTS_STRES = [ ["A"], [[100.0]] ] 
 
 REGRESS_ALG   = "dlasso"
 REGRESS_VAR   = "1.0E-5"
@@ -61,14 +47,12 @@ REGRESS_NRM = True
 
 STRS_STYLE    = "ALL" # Options: "DIAG" or "ALL"
 
-# chimes_lsq build job — also reused by gen_subset_dopt for the descriptor job
-
 CHIMES_BUILD_NODES = 1
 CHIMES_BUILD_QUEUE = "pdebug"
 CHIMES_BUILD_TIME  = "01:00:00"
 
 CHIMES_SOLVE_NODES = 2
-CHIMES_SOLVE_QUEUE = "pdebug"
+CHIMES_SOLVE_QUEUE = "pdebug" 
 CHIMES_SOLVE_TIME  = "01:00:00"
 
 ################################
@@ -81,47 +65,17 @@ TIGHT_CRIT = WORKING_DIR + "ALL_BASE_FILES/tight_bond_crit.dat"
 LOOSE_CRIT = WORKING_DIR + "ALL_BASE_FILES/loose_bond_crit.dat"
 CLU_CODE   = "/p/lustre3/lindsey11/al_driver-myLLfork/utilities/new_ts_clu.cpp"
 
-# --- MC energy-histogram selection (used when DO_DOPT = False) ---
 MEM_BINS = 40
 MEM_CYCL = MEM_BINS/10
 MEM_NSEL = 100
-MEM_ECUT = 4000.0 #  Set LTMENER false in run_md.cluster
+MEM_ECUT = 4000.0 #  Set ATMENER false in run_md.cluster # 500.0 # Updated from 100 since now md code includes atom energy offsets
 
-CALC_REPO_ENER_CENT_QUEUE = "pdebug"
-CALC_REPO_ENER_CENT_TIME = "1:00:00"
+CALC_REPO_ENER_CENT_QUEUE = "pdebug" 
+CALC_REPO_ENER_CENT_TIME = "1:00:00" 
 
 CALC_REPO_ENER_QUEUE =  "pdebug"
 CALC_REPO_ENER_TIME  =  "1:00:00"
 
-# --- D-optimality (maxvol) selection ---
-# When True, skips CLUENER_CALC and runs gen_subset_dopt() instead of gen_subset().
-DO_DOPT = True
-
-# Clusters with max per-atom gamma outside this window are excluded:
-#   gamma < DOPT_GAMMA_MIN  →  already well-represented in the training set
-#   gamma > DOPT_GAMMA_MAX  →  too far from the current model's domain of validity
-DOPT_GAMMA_MIN = 3.0
-DOPT_GAMMA_MAX = 10.0
-
-# Stop active learning when D-opt finds no clusters above the gamma threshold.
-DOPT_STOP_ON_EMPTY = True
-
-# How the pseudo A matrix (A_atomic) is built before maxvol:
-#   False (default) - hstack each atom's fx,fy,fz into one row (per-atom gamma)
-#   True            - keep force-component rows separate (per-component gamma)
-DO_COMPONENT = False
-
-# Relative singular-value cutoff for pinv of the maxvol submatrix.
-DOPT_RCOND = 1.0e-12
-
-# Maxvol Slurm job (runs in parallel with the descriptor chimes_lsq job).
-# Defaults (if unset) mirror CHIMES_BUILD_* / HPC_PPN / CHIMES_LSQ_MODULES.
-DOPT_MAXVOL_NODES   = 1
-DOPT_MAXVOL_PPN     = HPC_PPN
-DOPT_MAXVOL_TIME    = "01:00:00"
-DOPT_MAXVOL_QUEUE   = "pdebug"
-DOPT_MAXVOL_MODULES = ""   # must provide numpy + maxvolpy; falls back to CHIMES_LSQ_MODULES
-# DOPT_MAXVOL_MEM   = "128"  # GB; only applied on UM-ARC via helpers.create_and_launch_job
 
 ################################
 ##### Molecular Dynamics
