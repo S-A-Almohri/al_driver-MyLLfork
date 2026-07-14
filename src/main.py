@@ -497,19 +497,28 @@ def main(args):
 
                 if config.DO_DOPT:
                     n_dopt_sel = gen_selections.gen_subset_dopt(
-                            gamma_min      = config.DOPT_GAMMA_MIN,
-                            gamma_max      = config.DOPT_GAMMA_MAX,
-                            component      = config.DO_COMPONENT,
-                            rcond          = config.DOPT_RCOND,
-                            job_executable = config.CHIMES_LSQ,
-                            job_nodes      = str(config.CHIMES_BUILD_NODES),
-                            job_ppn        = str(config.HPC_PPN),
-                            job_walltime   = str(config.CHIMES_BUILD_TIME),
-                            job_queue      = config.CHIMES_BUILD_QUEUE,
-                            job_account    = config.HPC_ACCOUNT,
-                            job_system     = config.HPC_SYSTEM,
-                            job_email      = config.HPC_EMAIL,
-                            job_modules    = config.CHIMES_LSQ_MODULES)
+                            gamma_min          = config.DOPT_GAMMA_MIN,
+                            gamma_max          = config.DOPT_GAMMA_MAX,
+                            component          = config.DO_COMPONENT,
+                            rcond              = config.DOPT_RCOND,
+                            driver_dir         = config.DRIVER_DIR,
+                            job_python         = config.HPC_PYTHON,
+                            job_executable     = config.CHIMES_LSQ,
+                            job_nodes          = str(config.CHIMES_BUILD_NODES),
+                            job_ppn            = str(config.HPC_PPN),
+                            job_walltime       = str(config.CHIMES_BUILD_TIME),
+                            job_queue          = config.CHIMES_BUILD_QUEUE,
+                            job_account        = config.HPC_ACCOUNT,
+                            job_system         = config.HPC_SYSTEM,
+                            job_email          = config.HPC_EMAIL,
+                            job_modules        = config.CHIMES_LSQ_MODULES,
+                            maxvol_job_python  = config.DOPT_MAXVOL_PYTHON,
+                            maxvol_job_nodes   = str(config.DOPT_MAXVOL_NODES),
+                            maxvol_job_ppn     = str(config.DOPT_MAXVOL_PPN),
+                            maxvol_job_walltime= str(config.DOPT_MAXVOL_TIME),
+                            maxvol_job_queue   = config.DOPT_MAXVOL_QUEUE,
+                            maxvol_job_modules = config.DOPT_MAXVOL_MODULES,
+                            maxvol_job_mem     = str(config.DOPT_MAXVOL_MEM) if config.DOPT_MAXVOL_MEM else "")
                 else:
                     gen_selections.gen_subset(
                             nsel     = config.MEM_NSEL, # Number of selections to make
@@ -1095,19 +1104,28 @@ def main(args):
 
                     if config.DO_DOPT:
                         n_dopt_sel = gen_selections.gen_subset_dopt(
-                                gamma_min      = config.DOPT_GAMMA_MIN,
-                                gamma_max      = config.DOPT_GAMMA_MAX,
-                                component      = config.DO_COMPONENT,
-                                rcond          = config.DOPT_RCOND,
-                                job_executable = config.CHIMES_LSQ,
-                                job_nodes      = str(config.CHIMES_BUILD_NODES),
-                                job_ppn        = str(config.HPC_PPN),
-                                job_walltime   = str(config.CHIMES_BUILD_TIME),
-                                job_queue      = config.CHIMES_BUILD_QUEUE,
-                                job_account    = config.HPC_ACCOUNT,
-                                job_system     = config.HPC_SYSTEM,
-                                job_email      = config.HPC_EMAIL,
-                                job_modules    = config.CHIMES_LSQ_MODULES)
+                                gamma_min          = config.DOPT_GAMMA_MIN,
+                                gamma_max          = config.DOPT_GAMMA_MAX,
+                                component          = config.DO_COMPONENT,
+                                rcond              = config.DOPT_RCOND,
+                                driver_dir         = config.DRIVER_DIR,
+                                job_python         = config.HPC_PYTHON,
+                                job_executable     = config.CHIMES_LSQ,
+                                job_nodes          = str(config.CHIMES_BUILD_NODES),
+                                job_ppn            = str(config.HPC_PPN),
+                                job_walltime       = str(config.CHIMES_BUILD_TIME),
+                                job_queue          = config.CHIMES_BUILD_QUEUE,
+                                job_account        = config.HPC_ACCOUNT,
+                                job_system         = config.HPC_SYSTEM,
+                                job_email          = config.HPC_EMAIL,
+                                job_modules        = config.CHIMES_LSQ_MODULES,
+                                maxvol_job_python  = config.DOPT_MAXVOL_PYTHON,
+                                maxvol_job_nodes   = str(config.DOPT_MAXVOL_NODES),
+                                maxvol_job_ppn     = str(config.DOPT_MAXVOL_PPN),
+                                maxvol_job_walltime= str(config.DOPT_MAXVOL_TIME),
+                                maxvol_job_queue   = config.DOPT_MAXVOL_QUEUE,
+                                maxvol_job_modules = config.DOPT_MAXVOL_MODULES,
+                                maxvol_job_mem     = str(config.DOPT_MAXVOL_MEM) if config.DOPT_MAXVOL_MEM else "")
                     else:
                         gen_selections.gen_subset(
                                 repo      = "../CENTRAL_REPO/full_repo.energies_normed",

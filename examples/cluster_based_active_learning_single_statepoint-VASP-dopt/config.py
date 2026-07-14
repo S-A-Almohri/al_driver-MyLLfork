@@ -4,17 +4,19 @@
 # Key difference from the MC energy-histogram example:
 #   DO_DOPT = True
 #   This activates gen_subset_dopt() instead of gen_subset(), which:
-#     1. Builds an atomic design matrix A_atomic from GEN_FF/A.txt by
-#        hstacking every three consecutive force rows (fx_i, fy_i, fz_i).
-#     2. Runs maxvol to find the D-optimal subset; inverts the square submatrix.
-#     3. Submits a chimes_lsq job to generate descriptors for candidate clusters.
-#     4. Computes per-cluster uncertainty (gamma = max row of A_cand @ inv_A_ref).
-#     5. Selects clusters whose max gamma falls in [DOPT_GAMMA_MIN, DOPT_GAMMA_MAX].
+#     1. Prepares candidate-cluster inputs for chimes_lsq.
+#     2. Submits TWO Slurm jobs in parallel:
+#          (a) chimes_lsq → candidate descriptors (DOPT_DESCRIPTORS/A.txt)
+#          (b) run_dopt_maxvol.py → A_atomic + maxvol + pinv
+#              (DOPT_MAXVOL/inverse_A_subset.npy) on a compute node
+#     3. Waits for both jobs, then scores gamma = max(A_cand @ inv_A_ref).
+#     4. Selects clusters whose max gamma falls in [DOPT_GAMMA_MIN, DOPT_GAMMA_MAX].
 #   The ChIMES dumb-energy calculation (CLUENER_CALC) is skipped entirely.
 #
 # Prerequisites:
-#   pip install maxvolpy
-        
+#   A python with maxvolpy for the maxvol Slurm job — set DOPT_MAXVOL_PYTHON
+#   (e.g. .../envs/Pmini/bin/python). Keep HPC_PYTHON for the rest of ALD.
+
 ################################
 ##### General options
 ################################
@@ -114,6 +116,22 @@ DO_COMPONENT = False
 # The rank of the design matrix and the submatrix condition number are always
 # reported so ill-conditioning is visible in the log.
 DOPT_RCOND = 1.0e-12
+
+# Maxvol Slurm job (runs in parallel with the descriptor chimes_lsq job).
+# Defaults (if unset) mirror CHIMES_BUILD_* / HPC_PPN / CHIMES_LSQ_MODULES.
+# Override these when the head/login node cannot hold A_atomic in memory.
+DOPT_MAXVOL_NODES   = 1
+DOPT_MAXVOL_PPN     = HPC_PPN
+DOPT_MAXVOL_TIME    = "01:00:00"
+DOPT_MAXVOL_QUEUE   = "pdebug"
+DOPT_MAXVOL_MODULES = ""   # optional module load; prefer DOPT_MAXVOL_PYTHON for conda
+# DOPT_MAXVOL_MEM   = "128"  # GB; only applied on UM-ARC via helpers.create_and_launch_job
+
+# Python used ONLY by the maxvol compute job (must import maxvolpy + numpy).
+# Keep this separate from HPC_PYTHON so the rest of ALD can use a different env.
+# Example (Pmini conda env):
+#   DOPT_MAXVOL_PYTHON = "/path-to/CondaEnv/miniconda/envs/Pmini/bin/python"
+DOPT_MAXVOL_PYTHON = HPC_PYTHON  # <-- set to Pmini python before running on the cluster
 
 # MEM_ECUT is still used as a pre-filter if DO_DOPT is False; kept here for
 # easy toggling between methods.

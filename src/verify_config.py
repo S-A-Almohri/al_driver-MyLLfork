@@ -93,6 +93,13 @@ def print_help():
     PARAM.append("DOPT_STOP_ON_EMPTY");             VARTYP.append("bool");          DETAILS.append("If true, stop active learning when D-opt selects zero clusters above the gamma threshold (default: True)")
     PARAM.append("DO_COMPONENT");                    VARTYP.append("bool");          DETAILS.append("If true (and DO_DOPT is true), keep each force component row (fx, fy, fz) as its own row in the pseudo A matrix instead of hstacking the three into one per-atom row before maxvol (default: False)")
     PARAM.append("DOPT_RCOND");                      VARTYP.append("float");         DETAILS.append("Relative singular-value cutoff for the pseudo-inverse (pinv) of the D-optimal submatrix; guards against near-singular/rank-deficient inverses. 0 recovers inv-like behavior (default: 1.0e-12)")
+    PARAM.append("DOPT_MAXVOL_NODES");               VARTYP.append("int");           DETAILS.append("Number of nodes for the D-opt maxvol Slurm job (default: CHIMES_BUILD_NODES)")
+    PARAM.append("DOPT_MAXVOL_PPN");                 VARTYP.append("int");           DETAILS.append("Processors per node for the D-opt maxvol Slurm job (default: HPC_PPN)")
+    PARAM.append("DOPT_MAXVOL_TIME");                VARTYP.append("str");           DETAILS.append("Walltime for the D-opt maxvol Slurm job (default: CHIMES_BUILD_TIME)")
+    PARAM.append("DOPT_MAXVOL_QUEUE");               VARTYP.append("str");           DETAILS.append("Queue for the D-opt maxvol Slurm job (default: CHIMES_BUILD_QUEUE)")
+    PARAM.append("DOPT_MAXVOL_MODULES");             VARTYP.append("str");           DETAILS.append("Modules for the D-opt maxvol Slurm job (default: CHIMES_LSQ_MODULES). Prefer DOPT_MAXVOL_PYTHON over modules for conda/maxvolpy.")
+    PARAM.append("DOPT_MAXVOL_MEM");                 VARTYP.append("str");           DETAILS.append("Memory (GB) for the D-opt maxvol Slurm job; used on UM-ARC via --mem-per-cpu (default: empty / unused)")
+    PARAM.append("DOPT_MAXVOL_PYTHON");              VARTYP.append("str");           DETAILS.append("Python executable for the D-opt maxvol Slurm job only (must provide numpy + maxvolpy), e.g. path to a conda env's python. Does not change HPC_PYTHON used by the rest of ALD (default: HPC_PYTHON)")
     PARAM.append("CALC_REPO_ENER_CENT_QUEUE");      VARTYP.append("str");           DETAILS.append("Queue to submit cluster ChIMES \"dumb\" energy calculations for central repository clusters to")
     PARAM.append("CALC_REPO_ENER_CENT_TIME");       VARTYP.append("str");           DETAILS.append("Walltime for ChIMES \"dumb\" energy calculations for central repository clusters")
     PARAM.append("CALC_REPO_ENER_QUEUE");           VARTYP.append("str");           DETAILS.append("Queue to submit cluster ChIMES \"dumb\" energy calculations for candidate clusters to")
@@ -1574,6 +1581,45 @@ def verify(user_config):
                 print("         Will use a value of 1.0e-12")
 
                 user_config.DOPT_RCOND = 1.0e-12
+
+            # Maxvol compute-node job resources (defaults mirror descriptor / build job)
+            if not hasattr(user_config,'DOPT_MAXVOL_NODES'):
+                print("WARNING: Option config.DOPT_MAXVOL_NODES was not set")
+                print("         Will use config.CHIMES_BUILD_NODES")
+                user_config.DOPT_MAXVOL_NODES = user_config.CHIMES_BUILD_NODES
+
+            if not hasattr(user_config,'DOPT_MAXVOL_PPN'):
+                print("WARNING: Option config.DOPT_MAXVOL_PPN was not set")
+                print("         Will use config.HPC_PPN")
+                user_config.DOPT_MAXVOL_PPN = user_config.HPC_PPN
+
+            if not hasattr(user_config,'DOPT_MAXVOL_TIME'):
+                print("WARNING: Option config.DOPT_MAXVOL_TIME was not set")
+                print("         Will use config.CHIMES_BUILD_TIME")
+                user_config.DOPT_MAXVOL_TIME = user_config.CHIMES_BUILD_TIME
+
+            if not hasattr(user_config,'DOPT_MAXVOL_QUEUE'):
+                print("WARNING: Option config.DOPT_MAXVOL_QUEUE was not set")
+                print("         Will use config.CHIMES_BUILD_QUEUE")
+                user_config.DOPT_MAXVOL_QUEUE = user_config.CHIMES_BUILD_QUEUE
+
+            if not hasattr(user_config,'DOPT_MAXVOL_MODULES'):
+                print("WARNING: Option config.DOPT_MAXVOL_MODULES was not set")
+                print("         Will use config.CHIMES_LSQ_MODULES")
+                user_config.DOPT_MAXVOL_MODULES = getattr(user_config, 'CHIMES_LSQ_MODULES', "")
+
+            if not hasattr(user_config,'DOPT_MAXVOL_MEM'):
+                # Empty: helpers only apply job_mem on UM-ARC; leave unset by default
+                user_config.DOPT_MAXVOL_MEM = ""
+
+            if not hasattr(user_config,'DOPT_MAXVOL_PYTHON') or not user_config.DOPT_MAXVOL_PYTHON:
+                # Python used only by the maxvol compute job (must import maxvolpy).
+                # Keep separate from HPC_PYTHON so the rest of ALD is unaffected.
+                print("WARNING: Option config.DOPT_MAXVOL_PYTHON was not set")
+                print("         Will use config.HPC_PYTHON for the maxvol job.")
+                print("         Set DOPT_MAXVOL_PYTHON to a python that has maxvolpy")
+                print("         (e.g. .../envs/Pmini/bin/python) if HPC_PYTHON does not.")
+                user_config.DOPT_MAXVOL_PYTHON = user_config.HPC_PYTHON
 
         if not hasattr(user_config,'CALC_REPO_ENER_CENT_QUEUE'):
 
