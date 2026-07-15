@@ -958,13 +958,18 @@ def _build_a_atomic_from_file(amat_path, fm_setup_path=None, traj_list_path=None
 def _compute_cluster_gamma_from_amat(cand_amat_path, inverse_a_subset, all_clusters,
                                      component=False):
     """
-    Compute per-cluster max gamma by streaming the candidate A matrix.
+    Compute per-cluster mean gamma by streaming the candidate A matrix.
 
     Avoids building the full A_atomic_cand array in memory.
 
+    Per-atom gamma is still max leverage over the D-optimal pivots. Those
+    atom scores are then averaged so selection is molecule-level, not driven
+    by a single high-gamma atom.
+
     If component is True, each force row (fx, fy, fz) is scored on its own
-    against inverse_a_subset (width n_feat); otherwise the three rows are
-    hstacked into one atom row (width 3*n_feat) before scoring.
+    against inverse_a_subset (width n_feat) and the atom gamma is the max of
+    its three components; otherwise the three rows are hstacked into one atom
+    row (width 3*n_feat) before scoring.
     """
     cluster_gamma = []
     n_atoms_total = 0
@@ -979,22 +984,24 @@ def _compute_cluster_gamma_from_amat(cand_amat_path, inverse_a_subset, all_clust
 
     with open(cand_amat_path, 'r') as fstream:
         for n_atoms, _ in all_clusters:
-            cluster_max = -np.inf
+            atom_gammas = []
 
             for _ in range(n_atoms):
                 fx = _parse_a_line(fstream.readline())
                 fy = _parse_a_line(fstream.readline())
                 fz = _parse_a_line(fstream.readline())
                 if component:
+                    atom_max = -np.inf
                     for atomic_row in (fx, fy, fz):
                         dot_products = atomic_row @ inverse_a_subset
-                        cluster_max  = max(cluster_max, float(np.max(dot_products)))
+                        atom_max = max(atom_max, float(np.max(dot_products)))
+                    atom_gammas.append(atom_max)
                 else:
                     atomic_row   = np.concatenate((fx, fy, fz))
                     dot_products = atomic_row @ inverse_a_subset
-                    cluster_max  = max(cluster_max, float(np.max(dot_products)))
+                    atom_gammas.append(float(np.max(dot_products)))
 
-            cluster_gamma.append(cluster_max)
+            cluster_gamma.append(float(np.mean(atom_gammas)))
             n_atoms_total += n_atoms
 
     return np.array(cluster_gamma), n_atoms_total
@@ -1011,12 +1018,13 @@ def gen_subset_dopt(**kwargs):
            (DOPT_DESCRIPTORS/).
         2. Submit TWO compute-node jobs in parallel:
              (a) chimes_lsq → candidate design matrix b (A.txt)
-             (b) run_dopt_maxvol.py → A_atomic + maxvol + pinv
-                 (DOPT_MAXVOL/inverse_A_subset.npy)
+             (b) run_dopt_maxvol.py → A_atomic, drop exact-zero cols (energy
+                 offsets), plain maxvol, square inverse_A_subset.npy matching
+                 FITENER=false candidate width (no SVD)
            Maxvol is intentionally NOT run on the head/login node.
         3. Wait until both jobs finish.
         4. Stream the candidate A.txt against inverse_A_subset to get per-cluster
-           max gamma.
+           mean atomic gamma.
         5. Keep clusters with gamma in [gamma_min, gamma_max].
         6. Write all.xyzlist.dat and all.selection.dat; save diagnostic PDF.
 
@@ -1208,7 +1216,16 @@ def gen_subset_dopt(**kwargs):
     print("gen_subset_dopt: submitting descriptor and maxvol jobs in parallel...")
 
     os.chdir(WORK_DIR)
+    # Same MPI launch pattern as gen_ff.build_amat (ibrun/srun/mpirun).
     desc_job_cmd = args["job_executable"] + " fm_setup.in | tee fm_setup.log"
+    nproc = int(args["job_nodes"]) * int(args["job_ppn"])
+    desc_job_cmd = "-n " + str(nproc) + " " + desc_job_cmd
+    if args["job_system"] == "TACC":
+        desc_job_cmd = "ibrun " + desc_job_cmd
+    elif args["job_system"] == "slurm" or args["job_system"] == "UM-ARC":
+        desc_job_cmd = "srun " + desc_job_cmd
+    else:
+        desc_job_cmd = "mpirun " + desc_job_cmd
     desc_job_id = helpers.create_and_launch_job(
         job_name       = args["job_name"],
         job_nodes      = str(args["job_nodes"]),
@@ -1273,7 +1290,7 @@ def gen_subset_dopt(**kwargs):
     inverse_a_subset = np.load(inv_path)
 
     ################################
-    # 7. Stream candidate A matrix, compute per-cluster max gamma
+    # 7. Stream candidate A matrix, compute per-cluster mean gamma
     ################################
 
     cluster_gamma, n_atoms_cand = _compute_cluster_gamma_from_amat(
@@ -1308,10 +1325,10 @@ def gen_subset_dopt(**kwargs):
 
     plt.figure(figsize=(10, 6))
     plt.hist(cluster_gamma, bins=min(50, len(cluster_gamma)),
-             alpha=0.7, color='steelblue', label='Cluster max gamma')
+             alpha=0.7, color='steelblue', label='Cluster mean gamma')
     plt.axvline(x=GAMMA_MIN, color='green',  linestyle='--', label='gamma_min = {}'.format(GAMMA_MIN))
     plt.axvline(x=GAMMA_MAX, color='red',    linestyle='--', label='gamma_max = {}'.format(GAMMA_MAX))
-    plt.xlabel('Max Gamma per Cluster')
+    plt.xlabel('Mean Gamma per Cluster')
     plt.ylabel('Count')
     plt.title('D-Optimality Cluster Selection: Gamma Distribution')
     plt.legend()
