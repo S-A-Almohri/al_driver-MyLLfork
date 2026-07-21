@@ -93,6 +93,11 @@ def print_help():
     PARAM.append("DOPT_STOP_ON_EMPTY");             VARTYP.append("bool");          DETAILS.append("If true, stop active learning when D-opt selects zero clusters above the gamma threshold (default: True)")
     PARAM.append("DO_COMPONENT");                    VARTYP.append("bool");          DETAILS.append("If true (and DO_DOPT is true), keep each force component row (fx, fy, fz) as its own row in the pseudo A matrix instead of hstacking the three into one per-atom row before maxvol (default: False)")
     PARAM.append("DOPT_RCOND");                      VARTYP.append("float");         DETAILS.append("Relative singular-value cutoff for the pseudo-inverse (pinv) of the D-optimal submatrix; guards against near-singular/rank-deficient inverses. 0 recovers inv-like behavior (default: 1.0e-12)")
+    PARAM.append("DOPT_DESC_NODES");                 VARTYP.append("int");           DETAILS.append("Number of nodes for the D-opt descriptor chimes_lsq Slurm job (default: CHIMES_BUILD_NODES)")
+    PARAM.append("DOPT_DESC_PPN");                   VARTYP.append("int");           DETAILS.append("Processors per node for the D-opt descriptor chimes_lsq Slurm job (default: HPC_PPN)")
+    PARAM.append("DOPT_DESC_TIME");                  VARTYP.append("str");           DETAILS.append("Walltime for the D-opt descriptor chimes_lsq Slurm job (default: CHIMES_BUILD_TIME)")
+    PARAM.append("DOPT_DESC_QUEUE");                 VARTYP.append("str");           DETAILS.append("Queue for the D-opt descriptor chimes_lsq Slurm job (default: CHIMES_BUILD_QUEUE)")
+    PARAM.append("DOPT_DESC_MODULES");               VARTYP.append("str");           DETAILS.append("Modules for the D-opt descriptor chimes_lsq Slurm job (default: CHIMES_LSQ_MODULES)")
     PARAM.append("DOPT_MAXVOL_NODES");               VARTYP.append("int");           DETAILS.append("Number of nodes for the D-opt maxvol Slurm job (default: CHIMES_BUILD_NODES)")
     PARAM.append("DOPT_MAXVOL_PPN");                 VARTYP.append("int");           DETAILS.append("Processors per node for the D-opt maxvol Slurm job (default: HPC_PPN)")
     PARAM.append("DOPT_MAXVOL_TIME");                VARTYP.append("str");           DETAILS.append("Walltime for the D-opt maxvol Slurm job (default: CHIMES_BUILD_TIME)")
@@ -1581,6 +1586,32 @@ def verify(user_config):
                 print("         Will use a value of 1.0e-12")
 
                 user_config.DOPT_RCOND = 1.0e-12
+
+            # Descriptor chimes_lsq job resources (defaults mirror CHIMES_BUILD_*)
+            if not hasattr(user_config,'DOPT_DESC_NODES'):
+                print("WARNING: Option config.DOPT_DESC_NODES was not set")
+                print("         Will use config.CHIMES_BUILD_NODES")
+                user_config.DOPT_DESC_NODES = user_config.CHIMES_BUILD_NODES
+
+            if not hasattr(user_config,'DOPT_DESC_PPN'):
+                print("WARNING: Option config.DOPT_DESC_PPN was not set")
+                print("         Will use config.HPC_PPN")
+                user_config.DOPT_DESC_PPN = user_config.HPC_PPN
+
+            if not hasattr(user_config,'DOPT_DESC_TIME'):
+                print("WARNING: Option config.DOPT_DESC_TIME was not set")
+                print("         Will use config.CHIMES_BUILD_TIME")
+                user_config.DOPT_DESC_TIME = user_config.CHIMES_BUILD_TIME
+
+            if not hasattr(user_config,'DOPT_DESC_QUEUE'):
+                print("WARNING: Option config.DOPT_DESC_QUEUE was not set")
+                print("         Will use config.CHIMES_BUILD_QUEUE")
+                user_config.DOPT_DESC_QUEUE = user_config.CHIMES_BUILD_QUEUE
+
+            if not hasattr(user_config,'DOPT_DESC_MODULES'):
+                print("WARNING: Option config.DOPT_DESC_MODULES was not set")
+                print("         Will use config.CHIMES_LSQ_MODULES")
+                user_config.DOPT_DESC_MODULES = getattr(user_config, 'CHIMES_LSQ_MODULES', "")
 
             # Maxvol compute-node job resources (defaults mirror descriptor / build job)
             if not hasattr(user_config,'DOPT_MAXVOL_NODES'):

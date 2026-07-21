@@ -117,11 +117,19 @@ DO_COMPONENT = False
 # reported so ill-conditioning is visible in the log.
 DOPT_RCOND = 1.0e-12
 
+# Descriptor chimes_lsq Slurm job (MPI via ibrun/srun; can be smaller than BUILD_AMAT).
+# Defaults (if unset) mirror CHIMES_BUILD_* / HPC_PPN / CHIMES_LSQ_MODULES.
+DOPT_DESC_NODES   = 1
+DOPT_DESC_PPN     = HPC_PPN
+DOPT_DESC_TIME    = "01:00:00"
+DOPT_DESC_QUEUE   = "pdebug"
+DOPT_DESC_MODULES = ""   # falls back to CHIMES_LSQ_MODULES if unset
+
 # Maxvol Slurm job (runs in parallel with the descriptor chimes_lsq job).
 # Defaults (if unset) mirror CHIMES_BUILD_* / HPC_PPN / CHIMES_LSQ_MODULES.
 # Override these when the head/login node cannot hold A_atomic in memory.
 DOPT_MAXVOL_NODES   = 1
-DOPT_MAXVOL_PPN     = HPC_PPN
+DOPT_MAXVOL_PPN     = 1      # serial Python; maxvolpy is not MPI
 DOPT_MAXVOL_TIME    = "01:00:00"
 DOPT_MAXVOL_QUEUE   = "pdebug"
 DOPT_MAXVOL_MODULES = ""   # optional module load; prefer DOPT_MAXVOL_PYTHON for conda

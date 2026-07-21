@@ -2,13 +2,18 @@
 """
 Compute-node entry point for D-optimality maxvol + pseudo-inverse.
 
-Builds A_atomic from the training design matrix, runs maxvol, writes:
+Builds A_atomic from the training design matrix, drops exact-zero columns
+(energy offsets in force-only A), runs plain maxvol, and writes a square
+inverse matching FITENER=false candidate descriptor width:
   - A_atomic.txt
-  - inverse_A_subset.npy
-  - dopt_maxvol.log  (rank / condition diagnostics)
+  - kept_columns.txt
+  - inverse_A_subset.npy   (n_kept x n_kept)
+  - maxvol_pivots.txt
+  - dopt_maxvol.log
 
-Intended to be launched via Slurm from gen_subset_dopt() so the head/login
-node never holds the full A_atomic matrix in memory.
+No SVD truncation: that would leave the reference in a projected basis
+while candidates stay in the full force-feature space. Zero-drop alone keeps
+both sides aligned by column index.
 """
 
 from __future__ import print_function
@@ -30,7 +35,7 @@ import gen_selections  # noqa: E402
 
 def run_maxvol(amat_path, fm_setup, traj_list_path, component, rcond, outdir):
     """
-    Stream-build A_atomic, run maxvol, write inverse_A_subset.npy to outdir.
+    Stream-build A_atomic, drop null columns, maxvol, write square inverse.
 
     Returns
     -------
@@ -51,11 +56,24 @@ def run_maxvol(amat_path, fm_setup, traj_list_path, component, rcond, outdir):
     say("run_dopt_maxvol: amat_path={}".format(amat_path))
     say("run_dopt_maxvol: fm_setup={}".format(fm_setup))
     say("run_dopt_maxvol: component={}, rcond={}".format(component, rcond))
+    say("run_dopt_maxvol: mode=zero-column-drop + plain maxvol (no SVD)")
+
+    # A_comb at ALC>0 needs cumulative traj_list layout (ALC-0..N), not the
+    # short current-only traj_list.dat that gen_ff writes for new frames.
+    frame_natoms = gen_selections._frame_natoms_for_reference_amat(
+        amat_path,
+        fm_setup if fm_setup else None,
+        traj_list_path if traj_list_path else None)
+    if frame_natoms is not None:
+        say("run_dopt_maxvol: FITENER layout frames = {} (expected A rows = {})"
+            .format(len(frame_natoms),
+                    gen_selections._expected_a_row_count(frame_natoms, True)))
 
     A_atomic_ref, n_feat = gen_selections._build_a_atomic_from_file(
         amat_path,
         fm_setup_path=fm_setup if fm_setup else None,
         traj_list_path=traj_list_path if traj_list_path else None,
+        frame_natoms=frame_natoms,
         label="reference",
         component=component)
 
@@ -76,18 +94,62 @@ def run_maxvol(amat_path, fm_setup, traj_list_path, component, rcond, outdir):
         log.close()
         sys.exit(1)
 
-    ref_rank = np.linalg.matrix_rank(A_atomic_ref)
-    if ref_rank < n_cols_atomic:
-        say("WARNING: A_atomic_ref is rank deficient "
-            "(rank {} < {} columns).".format(ref_rank, n_cols_atomic))
-        say("         Gamma scores may be unreliable.")
+    # Drop exact-zero columns so A_work matches FITENER=false candidate width.
+    col_norm = np.linalg.norm(A_atomic_ref, axis=0)
+    keep = col_norm >= 1.0e-14
+    drop_cols = np.where(~keep)[0]
+    keep_cols = np.where(keep)[0]
+    if len(drop_cols) > 0:
+        say("run_dopt_maxvol: dropping {} exact-zero columns "
+            "(typical: energy offsets): {}".format(
+                len(drop_cols), drop_cols.tolist()))
     else:
-        say("run_dopt_maxvol: A_atomic_ref full column rank "
-            "({} == {}).".format(ref_rank, n_cols_atomic))
+        say("run_dopt_maxvol: no exact-zero columns to drop.")
 
-    say("run_dopt_maxvol: running maxvol...")
-    piv, _ = maxvol(A_atomic_ref, 1.0)
-    a_subset = A_atomic_ref[piv]
+    A_work = np.ascontiguousarray(A_atomic_ref[:, keep])
+    del A_atomic_ref
+    gc.collect()
+
+    n_kept_cols = A_work.shape[1]
+    say("run_dopt_maxvol: A_work shape after column drop: {}".format(A_work.shape))
+    np.savetxt(os.path.join(outdir, "kept_columns.txt"),
+               keep_cols, fmt="%d")
+
+    if n_rows_atomic < n_kept_cols:
+        say("ERROR: A_work is fat after column drop ({} rows < {} cols)."
+            .format(n_rows_atomic, n_kept_cols))
+        log.close()
+        sys.exit(1)
+
+    ref_rank = np.linalg.matrix_rank(A_work)
+    if ref_rank < n_kept_cols:
+        say("ERROR: A_work is still rank deficient after zero-drop "
+            "(rank {} < {} cols). Cannot form a nonsingular square maxvol "
+            "block while keeping descriptor column alignment. Inspect A_work "
+            "or relax the potential / remove redundant features."
+            .format(ref_rank, n_kept_cols))
+        log.close()
+        sys.exit(1)
+
+    say("run_dopt_maxvol: A_work full column rank "
+        "({} == {}).".format(ref_rank, n_kept_cols))
+
+    say("run_dopt_maxvol: running maxvol on A_work ({})...".format(A_work.shape))
+    try:
+        piv, _ = maxvol(A_work, 1.05)
+    except ValueError as exc:
+        say("ERROR: maxvol failed: {}".format(exc))
+        log.close()
+        sys.exit(1)
+
+    piv = np.asarray(piv, dtype=int)
+    a_subset = A_work[piv]
+    say("run_dopt_maxvol: pivot block shape: {}".format(a_subset.shape))
+    if a_subset.shape[0] != a_subset.shape[1]:
+        say("ERROR: expected square D-optimal block, got {}.".format(
+            a_subset.shape))
+        log.close()
+        sys.exit(1)
 
     cond_subset = np.linalg.cond(a_subset)
     say("run_dopt_maxvol: D-optimal submatrix condition number = {:.3e}".format(
@@ -106,14 +168,18 @@ def run_maxvol(amat_path, fm_setup, traj_list_path, component, rcond, outdir):
         log.close()
         sys.exit(1)
 
+    say("run_dopt_maxvol: inverse_A_subset shape: {} (square={})".format(
+        inverse_a_subset.shape,
+        inverse_a_subset.shape[0] == inverse_a_subset.shape[1]))
+
     del a_subset
-    del A_atomic_ref
+    del A_work
     gc.collect()
 
     inv_path = os.path.join(outdir, "inverse_A_subset.npy")
     np.save(inv_path, inverse_a_subset)
     np.savetxt(os.path.join(outdir, "maxvol_pivots.txt"),
-               np.asarray(piv, dtype=int), fmt="%d")
+               piv, fmt="%d")
 
     say("run_dopt_maxvol: wrote {} ({} pivot rows).".format(
         inv_path, len(piv)))
