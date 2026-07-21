@@ -58,10 +58,22 @@ def run_maxvol(amat_path, fm_setup, traj_list_path, component, rcond, outdir):
     say("run_dopt_maxvol: component={}, rcond={}".format(component, rcond))
     say("run_dopt_maxvol: mode=zero-column-drop + plain maxvol (no SVD)")
 
+    # A_comb at ALC>0 needs cumulative traj_list layout (ALC-0..N), not the
+    # short current-only traj_list.dat that gen_ff writes for new frames.
+    frame_natoms = gen_selections._frame_natoms_for_reference_amat(
+        amat_path,
+        fm_setup if fm_setup else None,
+        traj_list_path if traj_list_path else None)
+    if frame_natoms is not None:
+        say("run_dopt_maxvol: FITENER layout frames = {} (expected A rows = {})"
+            .format(len(frame_natoms),
+                    gen_selections._expected_a_row_count(frame_natoms, True)))
+
     A_atomic_ref, n_feat = gen_selections._build_a_atomic_from_file(
         amat_path,
         fm_setup_path=fm_setup if fm_setup else None,
         traj_list_path=traj_list_path if traj_list_path else None,
+        frame_natoms=frame_natoms,
         label="reference",
         component=component)
 

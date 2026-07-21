@@ -815,7 +815,7 @@ def _frame_natoms_from_traj(fm_setup_path, traj_list_path):
     if not os.path.exists(traj_list_path):
         return None
 
-    gen_ff_dir = os.path.dirname(fm_setup_path)
+    gen_ff_dir = os.path.dirname(fm_setup_path) if fm_setup_path else os.path.dirname(traj_list_path)
     n_files    = int(helpers.head(traj_list_path, 1)[0].split()[0])
     traj_lines = helpers.head(traj_list_path, n_files + 1)[1:]
 
@@ -833,6 +833,67 @@ def _frame_natoms_from_traj(fm_setup_path, traj_list_path):
         frames.extend(helpers.list_natoms(traj_file))
 
     return frames if frames else None
+
+
+def _frame_natoms_for_reference_amat(amat_path, fm_setup_path=None, traj_list_path=None):
+    """
+    Frame atom counts that match how the reference A matrix was built.
+
+    For ALC-0 (or A.txt): use the current GEN_FF/traj_list.dat.
+
+    For A_comb.txt at ALC-N (N>0): gen_ff cats previous A_comb with this ALC's
+    A.txt, but rewrites traj_list.dat to *only* the new frames.  Concatenate
+    ALC-0..ALC-N traj_list layouts so FITENER row skipping matches A_comb.
+    """
+    amat_path = os.path.abspath(amat_path)
+    amat_base = os.path.basename(amat_path)
+
+    if fm_setup_path:
+        fm_setup_path = os.path.abspath(fm_setup_path)
+    if traj_list_path:
+        traj_list_path = os.path.abspath(traj_list_path)
+    elif fm_setup_path:
+        traj_list_path = os.path.join(os.path.dirname(fm_setup_path), "traj_list.dat")
+
+    # Prefer cumulative layout for A_comb under ALC-N/
+    if amat_base == "A_comb.txt":
+        gen_ff_dir = os.path.dirname(amat_path)
+        alc_dir    = os.path.dirname(gen_ff_dir)
+        alc_name   = os.path.basename(alc_dir)
+        if alc_name.startswith("ALC-"):
+            try:
+                this_alc = int(alc_name.split("-", 1)[1])
+            except ValueError:
+                this_alc = None
+            if this_alc is not None and this_alc > 0:
+                work_root = os.path.dirname(alc_dir)
+                frames = []
+                for i in range(this_alc + 1):
+                    prev_gen = os.path.join(work_root, "ALC-{}".format(i), "GEN_FF")
+                    prev_tl  = os.path.join(prev_gen, "traj_list.dat")
+                    prev_fm  = os.path.join(prev_gen, "fm_setup.in")
+                    if not os.path.isfile(prev_tl):
+                        print("WARNING (gen_subset_dopt): missing {} for A_comb "
+                              "layout; cumulative traj_list may be incomplete."
+                              .format(prev_tl))
+                        continue
+                    part = _frame_natoms_from_traj(
+                        prev_fm if os.path.isfile(prev_fm) else fm_setup_path,
+                        prev_tl)
+                    if part:
+                        frames.extend(part)
+                        print("gen_subset_dopt: A_comb layout ALC-{}: {} frames "
+                              "from {}".format(i, len(part), prev_tl))
+                if frames:
+                    print("gen_subset_dopt: A_comb cumulative layout: {} frames "
+                          "(expected A rows with FITENER = {})".format(
+                              len(frames),
+                              _expected_a_row_count(frames, True)))
+                    return frames
+
+    if traj_list_path and os.path.isfile(traj_list_path):
+        return _frame_natoms_from_traj(fm_setup_path, traj_list_path)
+    return None
 
 
 def _expected_a_row_count(frame_natoms, fitener):
@@ -904,9 +965,8 @@ def _build_a_atomic_from_file(amat_path, fm_setup_path=None, traj_list_path=None
 
     if fitener:
         if frame_natoms is None:
-            if traj_list_path is None:
-                traj_list_path = os.path.join(os.path.dirname(fm_setup_path), "traj_list.dat")
-            frame_natoms = _frame_natoms_from_traj(fm_setup_path, traj_list_path)
+            frame_natoms = _frame_natoms_for_reference_amat(
+                amat_path, fm_setup_path, traj_list_path)
 
         if not frame_natoms:
             print("ERROR (gen_subset_dopt): FITENER is enabled but traj_list.dat "
